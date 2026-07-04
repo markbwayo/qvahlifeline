@@ -1,0 +1,14 @@
+[Unit]
+Description=Qvah LIFELINE (ontology-driven early warning)
+After=network.target
+
+[Service]
+User=operator
+WorkingDirectory=/opt/lifeline
+Environment=USE_LIVE=0
+ExecStart=/opt/lifeline/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8017
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
