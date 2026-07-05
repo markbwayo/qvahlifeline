@@ -34,7 +34,7 @@ import urllib.request
 from . import db
 
 # Locked pilot corridor: Manafwa River @ Bubulo (D-014). (south, west, north, east)
-PILOT_BBOX = (0.884, 34.264, 0.929, 34.309)
+PILOT_BBOX = (0.905, 34.260, 0.962, 34.305)
 
 LEGIBLE_MIN, LEGIBLE_MAX = 150, 400  # D-013 one-legible-district target
 
@@ -48,15 +48,22 @@ OVERPASS_ENDPOINTS = [
 # element is not added twice. Each value is the Overpass statement body; {bbox} ->
 # (S,W,N,E). We request 'out geom;' so ways carry their polyline + bounds.
 BUCKETS = [
+    # A CROSSING is a bridge/culvert/ford that CARRIES A VEHICLE ROAD (same highway
+    # classes as road_segment below -- they MUST stay in sync). This deliberately
+    # excludes footbridges (highway=path) and stream/ditch/drain culverts, of which
+    # rural OSM maps hundreds; they are not vehicle lifelines. Genuinely untagged
+    # road-over-river crossings are recovered geometrically in Step B. Fords are nodes
+    # and can't be highway-filtered, so all fords are kept and flagged for Step B.
     ("crossing", """
-        way["bridge"]["bridge"!="no"]{bbox};
-        way["tunnel"="culvert"]{bbox};
+        way["bridge"]["bridge"!="no"]["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|track|trunk_link|primary_link|secondary_link)$"]{bbox};
+        way["tunnel"="culvert"]["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|track|trunk_link|primary_link|secondary_link)$"]{bbox};
         way["ford"]["ford"!="no"]{bbox};
         node["ford"]["ford"!="no"]{bbox};
     """),
     ("river_reach", """
         way["waterway"~"^(river|stream)$"]{bbox};
     """),
+    # Vehicle road classes -- MUST match the crossing highway filter above.
     ("road_segment", """
         way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|track|trunk_link|primary_link|secondary_link)$"]{bbox};
     """),
