@@ -1,4 +1,11 @@
-"""Qvah LIFELINE - Phase 0. Glue + Leaflet map UI. Port 8017."""
+"""Qvah LIFELINE - Phase 0/1. Glue + Leaflet map UI. Port 8017.
+
+Phase 1 change: the map now frames whatever is in the graph (fitBounds to the
+ingested objects instead of the old seed setView), the header shows the live object
+count + source, crossings (type=bridge) are drawn larger with a dark outline so a
+sparse crossing set is easy to spot, and popups show structure + OSM id. No change to
+hazards, propagation, fragility, or actions.
+"""
 import json
 
 from fastapi import FastAPI
@@ -32,18 +39,27 @@ def state_map():
 def home():
     objs = db.objects()
     states = state_map()
-    names = {o["id"]: o["name"] for o in objs}
+    names = {o["id"]: (o["name"] or f"(unnamed {o['type']})") for o in objs}
 
     features = []
     for o in objs:
         st, chain = states.get(o["id"], ("OK", []))
         chain_txt = " \u2192 ".join(names.get(x, x) for x in chain)
         features.append({
-            "id": o["id"], "type": o["type"], "name": o["name"],
+            "id": o["id"], "type": o["type"], "name": names[o["id"]],
             "lat": o["lat"], "lon": o["lon"], "state": st,
             "color": COLORS.get(st, "#166534"), "why": chain_txt,
             "pop": o["props"].get("population", ""),
+            "structure": o["props"].get("structure", ""),
+            "source": o.get("source", ""),
         })
+
+    # header stats
+    n_obj = len(objs)
+    sources = sorted({(o.get("source") or "?") for o in objs})
+    n_cross = sum(1 for o in objs if o["type"] == "bridge")
+    stat_txt = (f"{n_obj} objects · {n_cross} crossings · source: "
+                f"{'+'.join(sources)}")
 
     with db.conn() as c:
         act_rows = c.execute(
@@ -89,7 +105,7 @@ footer{{font-size:10px;color:#666;padding:8px 16px}}
 h3{{color:#14532d;margin:14px 0 4px}}
 </style></head><body>
 <header><h1>Qvah LIFELINE — ontology-driven early warning</h1>
-<p>{ONTOLOGY_VERSION} · deterministic core, AI at the edges · demo graph (seed data)</p></header>
+<p>{ONTOLOGY_VERSION} · {stat_txt} · deterministic core, AI at the edges</p></header>
 <div id='map'></div>
 <div class='wrap'>
 <div class='hazard'>{hz_txt}</div>
@@ -104,19 +120,31 @@ h3{{color:#14532d;margin:14px 0 4px}}
 via Open-Meteo, CHIRPS · Elevation: SRTM · Population: WorldPop (CC-BY) · No language
 model decides any impact, trigger, or action.</footer>
 <script>
-var m = L.map('map').setView([1.022,34.205],14);
+var m = L.map('map').setView([0.9065,34.2865],13);
 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
  {{attribution:'© OpenStreetMap contributors'}}).addTo(m);
 var fs = {json.dumps(features)};
+var group = L.featureGroup();
 fs.forEach(function(f){{
-  var mk = L.circleMarker([f.lat,f.lon],{{radius:9,color:f.color,fillColor:f.color,
-    fillOpacity:0.85}}).addTo(m);
-  var pop = '<b>'+f.name+'</b><br>'+f.type+' — <b style="color:'+f.color+'">'+f.state+'</b>';
+  var isBridge = f.type === 'bridge';
+  var mk = L.circleMarker([f.lat,f.lon],{{
+    radius: isBridge ? 11 : 6,
+    color: isBridge ? '#111111' : f.color,
+    weight: isBridge ? 3 : 1,
+    fillColor: f.color, fillOpacity: 0.85
+  }});
+  var pop = '<b>'+f.name+'</b><br>'+f.type
+          + (f.structure ? ' ('+f.structure+')' : '')
+          + ' — <b style="color:'+f.color+'">'+f.state+'</b>';
   if (f.pop) pop += '<br>population: '+f.pop;
   if (f.why) pop += '<br><i style="font-size:11px">why: '+f.why+'</i>';
+  pop += '<br><span style="font-size:10px;color:#999">'+f.id+' · '+f.source+'</span>';
   mk.bindPopup(pop);
   mk.bindTooltip(f.name,{{permanent:false}});
+  mk.addTo(group);
 }});
+group.addTo(m);
+try {{ m.fitBounds(group.getBounds().pad(0.15)); }} catch(e) {{}}
 </script></body></html>"""
 
 
