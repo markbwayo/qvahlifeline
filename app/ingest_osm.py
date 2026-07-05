@@ -16,15 +16,25 @@ Doctrine (see 07, 09 and hard rule 1):
 
 This is the ONLY place Overpass is called by the app. Polite rate-limit + cache.
 
+Fetch is hardened:
+  * Cache key includes a hash of the query TEXT, so changing a query auto-refetches
+    (a stale result from an old query can never silently return). --refresh is now
+    rarely needed.
+  * Each bucket retries across two mirrors with exponential backoff; a failed bucket
+    isolates (returns empty + 'FAILED') instead of crashing the run. Successful buckets
+    stay cached, so a re-run only retries what failed.
+  * A real load ABORTS rather than write a graph missing a whole category.
+
 Usage (from /opt/lifeline):
     .venv/bin/python -m app.ingest_osm --dry-run     # inspect counts, tune the bbox
     .venv/bin/python -m app.ingest_osm               # load the locked pilot box
     .venv/bin/python -m app.ingest_osm --bbox 0.884,34.264,0.929,34.309
-    .venv/bin/python -m app.ingest_osm --refresh     # bypass the Overpass cache
+    .venv/bin/python -m app.ingest_osm --refresh     # force refetch (rarely needed)
 
 Attribution: (c) OpenStreetMap contributors, ODbL (shown in the UI footer).
 """
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -32,6 +42,12 @@ import urllib.error
 import urllib.request
 
 from . import db
+
+# Fetch resilience: Overpass gets busy. Longer read timeout than the server-side
+# [timeout:180], several attempts per mirror with exponential backoff.
+OVERPASS_TIMEOUT = 300   # seconds; must exceed the server-side [timeout:180]
+FETCH_ATTEMPTS = 3       # attempts per mirror before moving to the next
+BACKOFF_BASE = 5         # seconds; waits grow 5 -> 10 -> 20 per attempt
 
 # Locked pilot corridor: Manafwa River @ Bubulo (D-014). (south, west, north, east)
 PILOT_BBOX = (0.905, 34.260, 0.962, 34.305)
@@ -105,7 +121,7 @@ def _cache_put(key, value):
         c.execute("INSERT OR REPLACE INTO geocache VALUES (?,?,?)", (key, value, db.now()))
 
 
-def _post(url, body, timeout=180):
+def _post(url, body, timeout=OVERPASS_TIMEOUT):
     req = urllib.request.Request(
         url, data=body.encode("utf-8"),
         headers={"User-Agent": "qvah-lifeline-ingest/1.0",
@@ -114,29 +130,49 @@ def _post(url, body, timeout=180):
         return r.read().decode("utf-8")
 
 
-def fetch_bucket(bucket, bbox, refresh=False):
-    """Return the parsed Overpass 'elements' list for one bucket, cached raw."""
-    body = ("[out:json][timeout:180];(" +
+def _query_for(bucket, bbox):
+    return ("[out:json][timeout:180];(" +
             "".join(BUCKETS_BY_NAME[bucket].format(bbox=_bbox_str(bbox)).split()) +
             ");out geom;")
-    key = f"overpass:{bucket}:{_bbox_str(bbox)}"
+
+
+def _cache_key(bucket, bbox, query):
+    # The query TEXT is part of the key: change a query and the old cache no longer
+    # matches, so it refetches automatically. This is what stops a stale cached result
+    # (e.g. the pre-filter 86-crossing set) from silently coming back.
+    qh = hashlib.sha256(query.encode("utf-8")).hexdigest()[:12]
+    return f"overpass:{bucket}:{_bbox_str(bbox)}:{qh}"
+
+
+def fetch_bucket(bucket, bbox, refresh=False):
+    """Fetch one bucket. Returns (elements, source) where source is one of
+    'cache' | 'live' | 'FAILED'. Never raises: a failed bucket returns ([], 'FAILED')
+    so one slow category can't crash the whole run. Successful buckets are cached under
+    a query-specific key, so a re-run skips them and only retries what failed."""
+    query = _query_for(bucket, bbox)
+    key = _cache_key(bucket, bbox, query)
     if not refresh:
         cached = _cache_get(key)
         if cached is not None:
-            return json.loads(cached).get("elements", [])
+            return json.loads(cached).get("elements", []), "cache"
     last_err = None
     for ep in OVERPASS_ENDPOINTS:
-        for _ in range(2):
+        host = ep.split("//")[-1].split("/")[0]
+        for attempt in range(FETCH_ATTEMPTS):
             try:
-                raw = _post(ep, body)
+                raw = _post(ep, query)
                 json.loads(raw)  # validate (rate-limit pages are HTML -> raises)
                 _cache_put(key, raw)
-                return json.loads(raw).get("elements", [])
+                return json.loads(raw).get("elements", []), "live"
             except (urllib.error.URLError, urllib.error.HTTPError,
-                    json.JSONDecodeError, ValueError, TimeoutError) as err:
+                    json.JSONDecodeError, ValueError, TimeoutError, OSError) as err:
                 last_err = err
-                time.sleep(4)
-    raise RuntimeError(f"Overpass failed for bucket '{bucket}': {last_err}")
+                wait = BACKOFF_BASE * (2 ** attempt)
+                print(f"      ... {bucket}: {host} attempt {attempt + 1}/{FETCH_ATTEMPTS} "
+                      f"failed ({type(err).__name__}); waiting {wait}s", file=sys.stderr)
+                time.sleep(wait)
+    print(f"      ! {bucket}: all fetch attempts failed ({last_err})", file=sys.stderr)
+    return [], "FAILED"
 
 
 BUCKETS_BY_NAME = {name: body for name, body in BUCKETS}
@@ -188,15 +224,18 @@ def _population(tags):
 
 
 def build_objects(bbox, refresh=False):
-    """Fetch every bucket and return (objects, report). No DB writes here."""
+    """Fetch every bucket and return (objects, report, crossings, fetch_status).
+    No DB writes here."""
     objects = []          # list of dicts ready for db.add_object
     seen = set()          # osm keys already claimed by a higher-priority bucket
     report = {name: {"added": 0, "unnamed": 0} for name, _ in BUCKETS}
     report["_skipped_no_coords"] = 0
     crossings = []
+    fetch_status = {}
 
     for bucket, _ in BUCKETS:
-        els = fetch_bucket(bucket, bbox, refresh=refresh)
+        els, src = fetch_bucket(bucket, bbox, refresh=refresh)
+        fetch_status[bucket] = src
         for el in els:
             key = _osm_id(el)
             if key in seen:
@@ -231,7 +270,7 @@ def build_objects(bbox, refresh=False):
                 report[bucket]["unnamed"] += 1
         time.sleep(2)  # polite between buckets
 
-    return objects, report, crossings
+    return objects, report, crossings, fetch_status
 
 
 # --------------------------------------------------------------------------- #
@@ -247,20 +286,25 @@ def write_objects(objects):
                           o["props"], source="osm")
 
 
-def print_report(bbox, objects, report, crossings, wrote):
+def print_report(bbox, objects, report, crossings, fetch_status, wrote):
     total = len(objects)
+    failed = [b for b, s in fetch_status.items() if s == "FAILED"]
     print("\n" + "=" * 64)
     print(f"LIFELINE ingest — Manafwa @ Bubulo   bbox {_bbox_str(bbox)}")
     print("=" * 64)
-    print(f"{'category':<16}{'added':>7}{'unnamed':>9}")
-    print("-" * 32)
+    print(f"{'category':<16}{'added':>7}{'unnamed':>9}{'fetch':>10}")
+    print("-" * 42)
     for name, _ in BUCKETS:
         r = report[name]
-        print(f"{name:<16}{r['added']:>7}{r['unnamed']:>9}")
-    print("-" * 32)
+        print(f"{name:<16}{r['added']:>7}{r['unnamed']:>9}{fetch_status.get(name, '?'):>10}")
+    print("-" * 42)
     print(f"{'TOTAL objects':<16}{total:>7}")
     if report["_skipped_no_coords"]:
         print(f"(skipped {report['_skipped_no_coords']} features with no usable coords)")
+    if failed:
+        print(f"\n[!] buckets FAILED to fetch: {', '.join(failed)} — counts above are "
+              "incomplete for those. Re-run; cached buckets are skipped so only the "
+              "failed ones retry.")
 
     if total < LEGIBLE_MIN:
         print(f"\n[!] {total} objects < {LEGIBLE_MIN}: bbox may be too tight or OSM thin. "
@@ -310,10 +354,20 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     db.init()
-    objects, report, crossings = build_objects(args.bbox, refresh=args.refresh)
-    if not args.dry_run:
+    objects, report, crossings, fetch_status = build_objects(args.bbox, refresh=args.refresh)
+    failed = [b for b, s in fetch_status.items() if s == "FAILED"]
+
+    wrote = False
+    if not args.dry_run and not failed:
         write_objects(objects)
-    print_report(args.bbox, objects, report, crossings, wrote=not args.dry_run)
+        wrote = True
+    print_report(args.bbox, objects, report, crossings, fetch_status, wrote)
+
+    if failed and not args.dry_run:
+        print(f"[ABORT] {', '.join(failed)} failed to fetch — a partial graph was NOT "
+              "written (won't silently drop a whole category). Re-run the same command; "
+              "cached buckets are skipped so only the failed ones retry.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
