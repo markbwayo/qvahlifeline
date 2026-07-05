@@ -1,0 +1,3 @@
+id,structure,name,lat,lon,road_class,source,note
+op_manafwa_tc_bridge,bridge,Manafwa Town Council bridge,0.9406239,34.2802124,main_road,operator,Main-road crossing of the Manafwa at the town council; operator-classified from satellite (Image 1)
+op_north_footpath_culvert,culvert,North footpath culvert,0.9564980,34.2896510,footpath,operator,Footpath crossing upstream north of the town; operator-classified from satellite (Image 2)
