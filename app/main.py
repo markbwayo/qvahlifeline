@@ -45,14 +45,20 @@ def home():
     for o in objs:
         st, chain = states.get(o["id"], ("OK", []))
         chain_txt = " \u2192 ".join(names.get(x, x) for x in chain)
-        features.append({
+        feat = {
             "id": o["id"], "type": o["type"], "name": names[o["id"]],
             "lat": o["lat"], "lon": o["lon"], "state": st,
             "color": COLORS.get(st, "#166534"), "why": chain_txt,
             "pop": o["props"].get("population", ""),
             "structure": o["props"].get("structure", ""),
             "source": o.get("source", ""),
-        })
+        }
+        # roads and rivers carry line geometry (stored at ingest) -> draw as polylines
+        if o["type"] in ("road_segment", "river_reach"):
+            g = o["props"].get("geometry")
+            if g and len(g) > 1:
+                feat["geom"] = g
+        features.append(feat)
 
     # header stats
     n_obj = len(objs)
@@ -124,27 +130,46 @@ var m = L.map('map').setView([0.9065,34.2865],13);
 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
  {{attribution:'© OpenStreetMap contributors'}}).addTo(m);
 var fs = {json.dumps(features)};
-var group = L.featureGroup();
+var lineGroup = L.featureGroup();   // roads + rivers (drawn first, underneath)
+var dotGroup = L.featureGroup();    // villages, facilities, crossings (on top)
 fs.forEach(function(f){{
-  var isBridge = f.type === 'bridge';
-  var mk = L.circleMarker([f.lat,f.lon],{{
-    radius: isBridge ? 11 : 6,
-    color: isBridge ? '#111111' : f.color,
-    weight: isBridge ? 3 : 1,
-    fillColor: f.color, fillOpacity: 0.85
-  }});
+  var layer;
+  var isLine = (f.type === 'road_segment' || f.type === 'river_reach')
+               && f.geom && f.geom.length > 1;
+  if (isLine) {{
+    var isRiver = f.type === 'river_reach';
+    // rivers always blue; roads grey when OK, state colour + thicker when impacted
+    var col = isRiver ? '#2563eb' : (f.state === 'OK' ? '#9ca3af' : f.color);
+    var wt  = isRiver ? 2.5 : (f.state === 'OK' ? 2 : 4);
+    layer = L.polyline(f.geom, {{color: col, weight: wt, opacity: 0.9}});
+    layer.addTo(lineGroup);
+  }} else {{
+    var isBridge = f.type === 'bridge';   // crossings: larger, dark outline
+    layer = L.circleMarker([f.lat,f.lon],{{
+      radius: isBridge ? 10 : 6,
+      color: isBridge ? '#111111' : f.color,
+      weight: isBridge ? 3 : 1,
+      fillColor: f.color, fillOpacity: 0.85
+    }});
+    layer.addTo(dotGroup);
+  }}
   var pop = '<b>'+f.name+'</b><br>'+f.type
           + (f.structure ? ' ('+f.structure+')' : '')
           + ' — <b style="color:'+f.color+'">'+f.state+'</b>';
   if (f.pop) pop += '<br>population: '+f.pop;
   if (f.why) pop += '<br><i style="font-size:11px">why: '+f.why+'</i>';
   pop += '<br><span style="font-size:10px;color:#999">'+f.id+' · '+f.source+'</span>';
-  mk.bindPopup(pop);
-  mk.bindTooltip(f.name,{{permanent:false}});
-  mk.addTo(group);
+  layer.bindPopup(pop);
+  layer.bindTooltip(f.name,{{permanent:false}});
 }});
-group.addTo(m);
-try {{ m.fitBounds(group.getBounds().pad(0.15)); }} catch(e) {{}}
+lineGroup.addTo(m);
+dotGroup.addTo(m);
+try {{
+  var b = lineGroup.getBounds();
+  if (!b.isValid()) b = dotGroup.getBounds();
+  else b.extend(dotGroup.getBounds());
+  m.fitBounds(b.pad(0.08));
+}} catch(e) {{}}
 </script></body></html>"""
 
 
