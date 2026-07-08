@@ -421,6 +421,106 @@ def infer_crossing_links(crosses_threshold_m=CROSSES_THRESHOLD_M,
     return report
 
 
+# ---------------------------------------------------------------------------
+# Sub-step 3b: infer the reachability graph.
+#
+#   connects    (road <-> road): VEHICLE road_segments that share a vertex
+#               (a junction). Footpaths are excluded, so the vehicle network is
+#               vehicle-only.
+#   access_via  (settlement/facility -> road_segment): each settlement AND each
+#               serving facility (clinic/school/water_point) attaches to its
+#               nearest vehicle road - the entry point the propagation BFS uses
+#               as a start/goal. (09: access_via applies to facilities too, which
+#               the engine and seed graph already assume.)
+#   serves      (facility -> settlement): each settlement is served by the
+#               nearest facility of each type within a catchment cap
+#               (committee-editable).
+# Deterministic; idempotent (rebuilds only its own geom_* links). See 09 / D-025.
+# ---------------------------------------------------------------------------
+
+CONNECTS_ROUND_DP = 5          # ~1.1 m grid: shared rounded vertex == a junction
+SERVES_MAX_M = 8000.0          # catchment cap (~pilot-box diagonal); committee-editable
+SERVING_FACILITY_TYPES = ("clinic", "school", "water_point")
+
+
+def _round_pt(p):
+    return (round(p[0], CONNECTS_ROUND_DP), round(p[1], CONNECTS_ROUND_DP))
+
+
+def infer_road_network():
+    """connects: vehicle roads sharing a vertex. Idempotent. Returns a report."""
+    report = {"connects": 0}
+    with db.conn() as c:
+        objs = db.objects(c)
+        vroads = [o for o in objs
+                  if o["type"] == "road_segment" and _is_vehicle_road(o)]
+        c.execute("DELETE FROM links WHERE type='connects' "
+                  "AND inferred_by='geom_connects'")
+        vert = {}
+        for rd in vroads:
+            for p in _geom(rd):
+                vert.setdefault(_round_pt(p), set()).add(rd["id"])
+        added = set()
+        for rids in vert.values():
+            rids = sorted(rids)
+            for i in range(len(rids)):
+                for j in range(i + 1, len(rids)):
+                    pair = (rids[i], rids[j])
+                    if pair in added:
+                        continue
+                    added.add(pair)
+                    db.add_link(c, pair[0], pair[1], "connects", "geom_connects")
+                    report["connects"] += 1
+    return report
+
+
+def infer_access_and_serves(serves_max_m=SERVES_MAX_M):
+    """access_via (settlement/facility -> nearest vehicle road) and
+    serves (nearest facility per type -> settlement). Idempotent."""
+    report = {"access_via": 0, "serves": 0, "max_access_m": 0.0, "no_road": []}
+    with db.conn() as c:
+        objs = db.objects(c)
+        vroads = [o for o in objs
+                  if o["type"] == "road_segment" and _is_vehicle_road(o)]
+        c.execute("DELETE FROM links WHERE type='access_via' "
+                  "AND inferred_by='geom_access'")
+        c.execute("DELETE FROM links WHERE type='serves' "
+                  "AND inferred_by='geom_serves'")
+
+        attach_types = ("settlement",) + SERVING_FACILITY_TYPES
+        for o in objs:
+            if o["type"] not in attach_types:
+                continue
+            if not vroads:
+                report["no_road"].append(o["id"])
+                continue
+            pt = (o["lat"], o["lon"])
+            best, bestd = None, None
+            for rd in vroads:
+                d = _pt_poly_dist_m(pt, _geom(rd))
+                if bestd is None or d < bestd:
+                    best, bestd = rd, d
+            db.add_link(c, o["id"], best["id"], "access_via", "geom_access")
+            report["access_via"] += 1
+            report["max_access_m"] = max(report["max_access_m"], bestd)
+
+        settlements = [o for o in objs if o["type"] == "settlement"]
+        for ftype in SERVING_FACILITY_TYPES:
+            facs = [o for o in objs if o["type"] == ftype]
+            if not facs:
+                continue
+            for s in settlements:
+                best, bestd = None, None
+                for f in facs:
+                    d = _haversine_m(s["lat"], s["lon"], f["lat"], f["lon"])
+                    if bestd is None or d < bestd:
+                        best, bestd = f, d
+                if bestd is not None and bestd <= serves_max_m:
+                    db.add_link(c, best["id"], s["id"], "serves", "geom_serves")
+                    report["serves"] += 1
+    return report
+
+
 if __name__ == "__main__":
     import sys
     db.init()
@@ -439,9 +539,18 @@ if __name__ == "__main__":
     if mode in ("links", "all"):
         print("== infer crossing links (crosses / carries) ==")
         rep = infer_crossing_links()
-        print(f"  crosses links: {rep['crosses']}")
-        print(f"  carries links: {rep['carries']}")
+        print(f"  crosses links: {rep['crosses']}   carries links: {rep['carries']}")
         print(f"  footpath crossings skipped for carries: {rep['footpath_skipped']}")
         if rep["no_carrier"]:
-            print(f"  crossings with NO carrier road ({len(rep['no_carrier'])}): "
+            print(f"  crossings with NO carrier ({len(rep['no_carrier'])}): "
                   f"{rep['no_carrier']}")
+    if mode in ("reach", "all"):
+        print("== infer reachability graph (connects / access_via / serves) ==")
+        n = infer_road_network()
+        a = infer_access_and_serves()
+        print(f"  connects links: {n['connects']}")
+        print(f"  access_via links: {a['access_via']} "
+              f"(farthest attach {a['max_access_m']:.0f} m)")
+        print(f"  serves links: {a['serves']}")
+        if a["no_road"]:
+            print(f"  assets with NO vehicle road to attach to: {a['no_road']}")
