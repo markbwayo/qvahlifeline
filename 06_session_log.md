@@ -3,6 +3,17 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 8 — Step B sub-step 3a: crosses + carries inference
+- What changed: app/links.py gains infer_crossing_links() (crosses = nearest reach
+  <=50 m; carries = vehicle roads <=15 m; footpath gate; synth-aware; idempotent).
+  D-024 logged. No 09 change (crosses/carries/inferred_by already in spec).
+- Tested + result: tests/test_infer_crossing_links.py + prior = 26 passed. Live on real
+  graph: <C> crosses, <K> carries. Town-bridge carrier check: w128611448 -> <...>,
+  w902422828 -> <...> (no cross-link / cross-link -> retuned).
+- Days to deadline: 23 (internal 30 Jul).
+- NEXT STEP: sub-step 3b — connects + access_via + serves (the reachability graph),
+  each with inferred_by + a test.
+
 ## Session 7 — Step B sub-step 2: geometric crossing synthesis
 - What changed: app/links.py gains synthesise_crossings() (vehicle road×river
   intersections -> source=synth, needs_review, NO structure); 09 -> v0.4; D-023 logged.
