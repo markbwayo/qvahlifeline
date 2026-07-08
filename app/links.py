@@ -331,6 +331,96 @@ def synthesise_crossings(threshold_m=SYNTH_CLUSTER_M):
     return created
 
 
+# ---------------------------------------------------------------------------
+# Sub-step 3a: infer crossing-anchored links from geometry.
+#
+#   crosses  (bridge -> river_reach): the crossing links to the NEAREST reach
+#            within ~50 m - the channel it physically spans.
+#   carries  (road_segment -> bridge): every VEHICLE road whose line passes
+#            within ~15 m of the crossing carries it. 15 m is tuned so the two
+#            town bridges (19.8 m apart) don't cross-link to each other's road,
+#            while both segments of a road that splits at a bridge (~0 m) are kept.
+#
+# Footpath crossings get crosses but NOT carries (09 crossing_class gate).
+# Synth crossings get both, unclassified - so an unclassified crossing can sever
+# a route (the conservative rule wired later decides whether it does).
+# Deterministic; idempotent (rebuilds only its own geom_* links). See 09 / D-024.
+# ---------------------------------------------------------------------------
+
+CROSSES_THRESHOLD_M = 50.0
+CARRIES_THRESHOLD_M = 15.0        # < 19.8 m town-bridge separation, on purpose
+
+
+def _pt_seg_dist_m(p, a, b):
+    """Distance in metres from point p to segment a-b (local planar around p)."""
+    k = math.cos(math.radians(p[0])) * 111320.0        # metres per deg lon at p
+    ax, ay = (a[1] - p[1]) * k, (a[0] - p[0]) * 111320.0
+    bx, by = (b[1] - p[1]) * k, (b[0] - p[0]) * 111320.0
+    dx, dy = bx - ax, by - ay
+    if dx == 0 and dy == 0:
+        return math.hypot(ax, ay)
+    t = -(ax * dx + ay * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    return math.hypot(ax + t * dx, ay + t * dy)
+
+
+def _pt_poly_dist_m(pt, poly):
+    if len(poly) == 1:
+        return _haversine_m(pt[0], pt[1], poly[0][0], poly[0][1])
+    return min(_pt_seg_dist_m(pt, poly[i], poly[i + 1])
+               for i in range(len(poly) - 1))
+
+
+def infer_crossing_links(crosses_threshold_m=CROSSES_THRESHOLD_M,
+                         carries_threshold_m=CARRIES_THRESHOLD_M):
+    """Infer crosses + carries. Idempotent. Returns a report dict."""
+    report = {"crosses": 0, "carries": 0, "footpath_skipped": 0, "no_carrier": []}
+    with db.conn() as c:
+        objs = db.objects(c)
+        byid = {o["id"]: o for o in objs}
+        crossings = [o for o in objs if o["type"] == "bridge"]
+        reaches = [o for o in objs if o["type"] == "river_reach"]
+        roads = [o for o in objs if o["type"] == "road_segment"]
+
+        # rebuild only our own inferred links (preserve manual/other overrides)
+        c.execute("DELETE FROM links WHERE type='crosses' AND inferred_by='geom_crosses'")
+        c.execute("DELETE FROM links WHERE type='carries' AND inferred_by='geom_carries'")
+
+        for x in crossings:
+            xpt = (x["lat"], x["lon"])
+
+            # crosses: nearest reach within threshold
+            best_r, best_d = None, None
+            for r in reaches:
+                d = _pt_poly_dist_m(xpt, _geom(r))
+                if best_d is None or d < best_d:
+                    best_r, best_d = r, d
+            if best_r is not None and best_d <= crosses_threshold_m:
+                db.add_link(c, x["id"], best_r["id"], "crosses", "geom_crosses")
+                report["crosses"] += 1
+
+            # carries: footpath crossings never carry a vehicle road (09 gate)
+            if x["props"].get("crossing_class") == "footpath":
+                report["footpath_skipped"] += 1
+                continue
+
+            carriers = set()
+            srid = x["props"].get("synth_road_id")       # synth: its own road
+            if srid and srid in byid:
+                carriers.add(srid)
+            for rd in roads:
+                if not _is_vehicle_road(rd):
+                    continue
+                if _pt_poly_dist_m(xpt, _geom(rd)) <= carries_threshold_m:
+                    carriers.add(rd["id"])
+            for rid in carriers:
+                db.add_link(c, rid, x["id"], "carries", "geom_carries")
+                report["carries"] += 1
+            if not carriers:
+                report["no_carrier"].append(x["id"])
+    return report
+
+
 if __name__ == "__main__":
     import sys
     db.init()
@@ -346,3 +436,12 @@ if __name__ == "__main__":
             print(f"  synth @ ({pt[0]:.5f},{pt[1]:.5f})  road={road['id']} "
                   f"({_road_highway(road)})  reach={reach['id']}")
         print(f"  {len(created)} synthesised crossing(s) created (needs_review).")
+    if mode in ("links", "all"):
+        print("== infer crossing links (crosses / carries) ==")
+        rep = infer_crossing_links()
+        print(f"  crosses links: {rep['crosses']}")
+        print(f"  carries links: {rep['carries']}")
+        print(f"  footpath crossings skipped for carries: {rep['footpath_skipped']}")
+        if rep["no_carrier"]:
+            print(f"  crossings with NO carrier road ({len(rep['no_carrier'])}): "
+                  f"{rep['no_carrier']}")
