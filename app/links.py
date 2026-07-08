@@ -210,7 +210,139 @@ def inject_operator_crossings(csv_path=DEFAULT_CSV, threshold_m=MATCH_THRESHOLD_
     return results
 
 
+# ---------------------------------------------------------------------------
+# Sub-step 2: synthesise crossings from road x river geometry.
+#
+# Where a VEHICLE road_segment polyline crosses a river_reach polyline and no
+# crossing object already exists within ~50 m, create a review candidate.
+# We do NOT guess structure (structure drives fragility, and a wrong guess is a
+# wrong impact). A synthesised crossing carries source='synth', needs_review=True,
+# and NO structure, so it produces no fragility state and cannot yield an impact
+# until a human classifies it. See 09 (v0.4) and D-023.
+# ---------------------------------------------------------------------------
+
+SYNTH_SOURCE = "synth"
+SYNTH_CLUSTER_M = 50.0            # merge synth points within this; also dedup vs existing
+
+# Vehicle highway classes only. Footway/path/pedestrian/steps/cycleway/bridleway
+# are NOT vehicle roads and are excluded (a footbridge is not a clinic lifeline).
+# Adjust this set to your district (e.g. drop 'track') and re-run.
+VEHICLE_HIGHWAYS = {
+    "motorway", "trunk", "primary", "secondary", "tertiary",
+    "unclassified", "residential", "living_street", "service", "track", "road",
+    "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+}
+
+
+def _road_highway(o):
+    p = o["props"]
+    return (p.get("class") or (p.get("tags") or {}).get("highway") or "").strip().lower()
+
+
+def _is_vehicle_road(o):
+    return _road_highway(o) in VEHICLE_HIGHWAYS
+
+
+def _geom(o):
+    g = o["props"].get("geometry")
+    if g:
+        return [(pt[0], pt[1]) for pt in g]
+    return [(o["lat"], o["lon"])]
+
+
+def _bbox(poly):
+    lats = [p[0] for p in poly]
+    lons = [p[1] for p in poly]
+    return (min(lats), min(lons), max(lats), max(lons))
+
+
+def _bbox_overlap(b1, b2):
+    return not (b1[2] < b2[0] or b2[2] < b1[0] or b1[3] < b2[1] or b2[3] < b1[1])
+
+
+def _seg_intersect(p1, p2, p3, p4):
+    """Intersection point (lat,lon) of segments p1p2 and p3p4, or None.
+    Planar in lat/lon (fine at district scale). Uses lon as x, lat as y."""
+    x1, y1 = p1[1], p1[0]
+    x2, y2 = p2[1], p2[0]
+    x3, y3 = p3[1], p3[0]
+    x4, y4 = p4[1], p4[0]
+    d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3)
+    if d == 0:
+        return None                       # parallel/collinear -> ignore
+    t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d
+    u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return (y1 + t * (y2 - y1), x1 + t * (x2 - x1))   # (lat, lon)
+    return None
+
+
+def synthesise_crossings(threshold_m=SYNTH_CLUSTER_M):
+    """Create review-candidate crossings at vehicle-road x river intersections
+    that aren't already represented. Idempotent. Returns list of
+    (road_obj, reach_obj, (lat, lon)) for the crossings created this run."""
+    created = []
+    with db.conn() as c:
+        objs = db.objects(c)
+        roads = [o for o in objs if o["type"] == "road_segment" and _is_vehicle_road(o)]
+        reaches = [o for o in objs if o["type"] == "river_reach"]
+        existing_pts = [(o["lat"], o["lon"]) for o in objs if o["type"] == "bridge"]
+        new_pts = []                       # crossings synthesised this run
+
+        for road in roads:
+            rg = _geom(road)
+            if len(rg) < 2:
+                continue
+            rb = _bbox(rg)
+            for reach in reaches:
+                vg = _geom(reach)
+                if len(vg) < 2:
+                    continue
+                if not _bbox_overlap(rb, _bbox(vg)):
+                    continue
+                for i in range(len(rg) - 1):
+                    for j in range(len(vg) - 1):
+                        pt = _seg_intersect(rg[i], rg[i + 1], vg[j], vg[j + 1])
+                        if pt is None:
+                            continue
+                        if any(_haversine_m(pt[0], pt[1], a, b) <= threshold_m
+                               for a, b in existing_pts):
+                            continue       # already a crossing here
+                        if any(_haversine_m(pt[0], pt[1], a, b) <= threshold_m
+                               for a, b in new_pts):
+                            continue       # already synthesised this run
+                        new_pts.append(pt)
+                        created.append((road, reach, pt))
+
+        for road, reach, pt in created:
+            oid = f"synth:{pt[0]:.5f}_{pt[1]:.5f}"     # coordinate-stable, idempotent
+            props = {
+                "needs_review": True,
+                "synth": True,
+                "structure": None,                     # NOT guessed - no fragility yet
+                "synth_road_id": road["id"],
+                "synth_reach_id": reach["id"],
+                "synth_road_class": _road_highway(road),
+                "inferred_by": "road_x_river",
+                "synth_created_utc": db.now(),
+            }
+            db.add_object(c, oid, "bridge", None, pt[0], pt[1], props,
+                          source=SYNTH_SOURCE)
+    return created
+
+
 if __name__ == "__main__":
+    import sys
     db.init()
-    for r in inject_operator_crossings():
-        print(" ", r)
+    mode = sys.argv[1] if len(sys.argv) > 1 else "inject"
+    if mode in ("inject", "all"):
+        print("== inject operator crossings ==")
+        for r in inject_operator_crossings():
+            print(" ", r)
+    if mode in ("synth", "all"):
+        print("== synthesise road x river crossings ==")
+        created = synthesise_crossings()
+        for road, reach, pt in created:
+            print(f"  synth @ ({pt[0]:.5f},{pt[1]:.5f})  road={road['id']} "
+                  f"({_road_highway(road)})  reach={reach['id']}")
+        print(f"  {len(created)} synthesised crossing(s) created (needs_review).")
