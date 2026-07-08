@@ -3,6 +3,19 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 9 — Step B sub-step 3b: reachability graph inference
+- What changed: app/links.py gains infer_road_network() (connects) and
+  infer_access_and_serves() (access_via + serves); 09 -> v0.5 (access_via covers
+  facilities); D-025 logged.
+- Tested + result: tests/test_infer_reachability_graph.py + prior = 33 passed,
+  including a real-engine end-to-end that returns ISOLATED. Live on real graph:
+  <connects> connects, <access> access_via (farthest <m> m), <serves> serves.
+- Days to deadline: 23 (internal 30 Jul).
+- NEXT STEP: sub-step 3c — conservative fragility for unclassified crossings (fix the
+  `structure or "bridge"` fallback so needs_review crossings are treated MOST fragile,
+  not least), ontology.py + bridge_state unit test + 09 fragility note. MUST land
+  before any hazard is pointed at a real reach.
+
 ## Session 8 — Step B sub-step 3a: crosses + carries inference
 - What changed: app/links.py gains infer_crossing_links() (crosses = nearest reach
   <=50 m; carries = vehicle roads <=15 m; footpath gate; synth-aware; idempotent).

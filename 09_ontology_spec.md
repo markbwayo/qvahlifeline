@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v0.4 (THE core artifact)
+# 09 — Ontology Specification v0.5 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -56,7 +56,7 @@ All objects: `id, type, name, lat, lon, props_json, source, created_utc`.
 | `crosses` | bridge → river_reach | bridge node on/near waterway (≤50 m) |
 | `carries` | road_segment → bridge | road passes over the bridge |
 | `connects` | road_segment ↔ road_segment | shared junction |
-| `access_via` | settlement → road_segment | nearest road entry point(s) of the settlement |
+| `access_via` | settlement/facility → road_segment | nearest vehicle-road entry point; applies to settlements AND serving facilities (clinic/school/water_point), which the reachability BFS uses as start/goal nodes |
 | `serves` | clinic/school/water_point → settlement | catchment rule: nearest facility within threshold; committee-editable |
 | `on_floodplain` | settlement/asset → river_reach | elevation within Δh of reach AND within buffer distance (SRTM heuristic, v1) |
 A `bridge` (crossing) object is only created for a bridge/culvert/ford that carries a
