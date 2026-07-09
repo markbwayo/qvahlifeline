@@ -4,8 +4,10 @@ Sub-step 1 (this slice): inject operator-verified crossings from
 `data/operator_crossings.csv` into the object graph, reconciling them against
 OSM crossings. On a match the operator's engineering classification wins
 (structure / crossing_class), but the OSM object's id, name and coordinates are
-preserved so existing references and the demo map stay stable. See 09 (v0.3) and
-D-013 / D-022.
+preserved so existing references and the demo map stay stable -- except that an
+EMPTY OSM name is filled from the operator CSV (`name_source` records which), because
+OSM tags the demo spine `noname=yes` and hides its name on `bridge:name`. See 09
+(v0.9) and D-013 / D-022 / D-041.
 
 Reconciliation order per row (all deterministic; no language model touches this):
   1. Already injected on a prior run (matched by operator_id)  -> update in place.
@@ -119,18 +121,47 @@ def _resolve_hint(hint, osm_crossings):
     return None
 
 
-def _apply_in_place(c, obj, new_props):
+def _apply_in_place(c, obj, new_props, fallback_name=None):
     """Overwrite an existing object with operator classification, preserving its
-    id, name, coordinates and created_utc. Props merge; operator values win."""
+    id, coordinates and created_utc. Props merge; operator values win.
+
+    Name rule (09 v0.9, D-041): a NON-EMPTY OSM name is preserved -- the district
+    knows the structure by it and the operator must never silently rewrite it.
+    An EMPTY name is a hole, and the operator's CSV name fills it. `name_source`
+    records which, so the label's provenance is auditable and idempotent re-runs
+    cannot re-interpret an operator name as an OSM one.
+
+    Why the hole exists at all: OSM tags the demo spine `noname=yes` and puts the
+    structure's name on `bridge:name`, so `tags.name` -- and therefore the object's
+    name -- is NULL. Captured as `osm_bridge_name` for provenance, never as the label.
+    """
     props = dict(obj["props"])
     props.update(new_props)
+
+    existing = (obj["name"] or "").strip()
+    proposed = (fallback_name or "").strip()
+    if existing:
+        name = existing
+        props.setdefault("name_source", "osm")          # set once; never flipped
+    elif proposed:
+        name = proposed
+        props["name_source"] = "operator"
+    else:
+        name = obj["id"]                                # last resort, never silent
+        props["name_source"] = "object_id"
+
+    props.setdefault("osm_name", obj["name"])           # may legitimately be None
+    tags = props.get("tags") or {}
+    if tags.get("bridge:name"):
+        props.setdefault("osm_bridge_name", tags["bridge:name"])
+
     props["operator_injected_utc"] = db.now()
     c.execute("UPDATE objects SET type='bridge', name=?, props_json=?, "
               "source='operator' WHERE id=?",
-              (obj["name"], json.dumps(props), obj["id"]))
+              (name, json.dumps(props), obj["id"]))
 
 
-def _dedup_onto(c, target, op_props, op_lat, op_lon):
+def _dedup_onto(c, target, op_props, op_lat, op_lon, op_name=None):
     """Fold operator props onto an existing OSM crossing (operator wins)."""
     d = _haversine_m(op_lat, op_lon, target["lat"], target["lon"])
     merged = dict(op_props)
@@ -139,7 +170,7 @@ def _dedup_onto(c, target, op_props, op_lat, op_lon):
     merged["dedup_dist_m"] = round(d, 1)
     if "single_point_of_failure" in target["props"]:
         merged["single_point_of_failure"] = target["props"]["single_point_of_failure"]
-    _apply_in_place(c, target, merged)
+    _apply_in_place(c, target, merged, fallback_name=op_name)
     return round(d, 1)
 
 
@@ -165,7 +196,7 @@ def inject_operator_crossings(csv_path=DEFAULT_CSV, threshold_m=MATCH_THRESHOLD_
                 # (1) already injected on a prior run -> update in place (idempotent)
                 prior = _find_by_operator_id(c, op_id)
                 if prior is not None:
-                    _apply_in_place(c, prior, op_props)
+                    _apply_in_place(c, prior, op_props, fallback_name=name)
                     results.append((op_id, "reinjected", prior["id"]))
                     continue
 
@@ -176,7 +207,7 @@ def inject_operator_crossings(csv_path=DEFAULT_CSV, threshold_m=MATCH_THRESHOLD_
                         raise ValueError(
                             f"operator crossing {op_id!r}: match_hint {hint!r} "
                             f"resolves to no OSM crossing in the graph.")
-                    d = _dedup_onto(c, target, op_props, lat, lon)
+                    d = _dedup_onto(c, target, op_props, lat, lon, op_name=name)
                     osm_crossings.remove(target)
                     results.append((op_id, "deduped_onto_osm", target["id"], d))
                     continue
@@ -197,7 +228,7 @@ def inject_operator_crossings(csv_path=DEFAULT_CSV, threshold_m=MATCH_THRESHOLD_
                         f"data/operator_crossings.csv to say which one it is.")
                 if len(within) == 1:
                     d, target = within[0]
-                    _dedup_onto(c, target, op_props, lat, lon)
+                    _dedup_onto(c, target, op_props, lat, lon, op_name=name)
                     osm_crossings.remove(target)
                     results.append((op_id, "deduped_onto_osm", target["id"], d))
                     continue
@@ -205,6 +236,7 @@ def inject_operator_crossings(csv_path=DEFAULT_CSV, threshold_m=MATCH_THRESHOLD_
                 # (4) genuinely new operator crossing
                 new_id = f"op:{op_id}"
                 props = dict(op_props)
+                props["name_source"] = "operator"      # no OSM object to inherit from
                 props["operator_injected_utc"] = db.now()
                 db.add_object(c, new_id, "bridge", name, lat, lon, props,
                               source="operator")
