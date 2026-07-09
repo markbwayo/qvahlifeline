@@ -3,6 +3,23 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 13 — Step B sub-step 5 COMPLETE: the spine is proven
+- What changed: propagate.py rewritten for correctness (per-settlement why-chain,
+  severed-road endpoints, deterministic sorted BFS, alternate named on REROUTED).
+  D-030 logged. STEP B IS COMPLETE.
+- FIRST REAL RESULT (emergency on w188321163, real 362-object graph): 18 impacts -
+  4 IMPASSABLE + 3 LIKELY_IMPASSABLE crossings, 5 SEVERED roads, 3 ISOLATED
+  settlements (Bumufuni Central, Nasitsapi, Bumufuni), 3 SERVICE_AT_RISK facilities
+  including Namuembi Medical Centre. The engine found the clinic-access failure on
+  its own; the SPOF was not pre-declared.
+- Bugs closed: three false-negative paths in the engine, incl. a village on a SEVERED
+  road reporting NO IMPACT (a live false all-clear). Regression-tested by running the
+  new suite against the old engine (5/10 fail).
+- Tested + result: tests/test_spine_isolation.py (10 new) + prior = 73 passed.
+- Days to deadline: 22 (internal 30 Jul).
+- NEXT STEP: Phase 2 - actions.py/playbook.csv wired to the real impacts, then the
+  map UI showing states + why-chains. Also open: hazard scope (see below).
+
 ## Session 12 — Step B sub-step 4: demo hazard on the real Manafwa reach
 - What changed: hazards.py demo now targets w188321163 via resolve_demo_reach()
   (env -> real -> seed -> raise); create_hazard validates target existence and type;
