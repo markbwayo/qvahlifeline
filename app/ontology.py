@@ -1,7 +1,7 @@
 """Ontology registry v0.1 - mirrors knowledge/09_ontology_spec.md. Code follows the
 spec, never the reverse. Deterministic: no model touches anything in this file."""
 
-ONTOLOGY_VERSION = "LIFELINE ontology v0.2 (2026-07) - conservative unknown-structure fragility"
+ONTOLOGY_VERSION = "LIFELINE ontology v0.3 (2026-07) - hazard-kind registry + playbook contract"
 
 OBJECT_TYPES = ["river_reach", "bridge", "road_segment", "settlement", "clinic",
                 "school", "water_point"]
@@ -10,6 +10,12 @@ LINK_TYPES = ["crosses", "carries", "connects", "access_via", "serves",
               "on_floodplain"]
 
 SEVERITIES = ["watch", "alert", "emergency"]
+
+# The hazard kinds the ontology knows (09, object type `hazard`). The playbook
+# loader validates against this list: a typo'd hazard_kind in data/playbook.csv
+# would otherwise match nothing and fire no action - a silent no-action, which is
+# the action-layer form of a false all-clear.
+HAZARD_KINDS = ["riverine_flood", "extreme_rain"]
 
 # State ordering: an object always keeps its WORST state.
 STATE_ORDER = ["OK", "AT_RISK", "DEGRADED", "REROUTED", "FLOOD_EXPOSED",

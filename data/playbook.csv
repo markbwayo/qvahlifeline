@@ -1,11 +1,19 @@
 object_type,state,hazard_kind,action_text,owner_role,lead_time_hrs
-bridge,LIKELY_IMPASSABLE,riverine_flood,Deploy inspection team; stage closure signage and diversion notice,District Engineer,24
-bridge,IMPASSABLE,riverine_flood,Close crossing; mark diversion; notify transport operators,District Engineer,12
-settlement,ISOLATED,riverine_flood,Send pre-agreed local-language alert to LC1/chief and community radio; verify boat or alternate crossing option,DDMC Communications,48
-settlement,REROUTED,riverine_flood,Notify settlement of alternate route and expected travel-time increase,DDMC Communications,48
-settlement,FLOOD_EXPOSED,riverine_flood,Issue move-to-higher-ground advisory via chief and radio; identify shelter school,DDMC Communications,24
-clinic,SERVICE_AT_RISK,riverine_flood,Pre-position essential drug kit and referral plan on community side of the crossing,District Health Officer,72
-water_point,SERVICE_AT_RISK,riverine_flood,Issue household water treatment advisory; stage purification tablets,District Water Officer,48
-road_segment,SEVERED,riverine_flood,Publish road closure to transport SACCOs and boda groups; stage repair assessment,District Engineer,24
-road_segment,DEGRADED,extreme_rain,Restrict heavy vehicles; monitor for washout,District Engineer,24
-school,SERVICE_AT_RISK,riverine_flood,Alert head teacher; prepare early-closure and shelter protocol,District Education Officer,48
+bridge,AT_RISK,riverine_flood,"Inspect the crossing before the peak; record scour, debris and abutment condition.",district engineer,48
+bridge,LIKELY_IMPASSABLE,riverine_flood,"Deploy an inspection team; stage closure signage and barriers at both approaches.",district engineer,24
+bridge,LIKELY_IMPASSABLE,riverine_flood,"Warn transporters and boda stages that this crossing is expected to close.",DDMC comms,24
+bridge,IMPASSABLE,riverine_flood,"Close the crossing, man both approaches, and log the closure time.",district engineer,12
+bridge,IMPASSABLE,riverine_flood,"Broadcast the closure by radio and WhatsApp in Lumasaba and English (DRAFT, human-approved).",DDMC comms,12
+road_segment,SEVERED,riverine_flood,"Barricade the cut section and post it on the district road-status board.",district engineer,24
+settlement,ISOLATED,riverine_flood,"Send the pre-agreed local-language alert to the chief by radio and WhatsApp; state plainly that no road alternate exists.",DDMC comms,48
+settlement,ISOLATED,riverine_flood,"Confirm boat or foot-crossing capacity and a stretcher-referral plan with the village health team.",DDMC health,48
+settlement,ISOLATED,riverine_flood,"Pre-position a 72-hour food and safe-water reserve on the settlement's own side of the crossing.",DDMC relief,72
+settlement,REROUTED,riverine_flood,"Publish the longer route and its travel time to the chief, boda stages and the ambulance service.",DDMC comms,48
+settlement,FLOOD_EXPOSED,riverine_flood,"Warn floodplain households; name the assembly point and the person who calls the move.",DDMC comms,24
+clinic,SERVICE_AT_RISK,riverine_flood,"Pre-position the essential drug kit and delivery supplies on the far side of the crossing.",DHO,72
+clinic,SERVICE_AT_RISK,riverine_flood,"Agree the referral route and standby transport with the sub-county ambulance before the crossing closes.",DHO,48
+clinic,FLOOD_EXPOSED,riverine_flood,"Lift drugs, records and the generator above the expected flood level.",DHO,24
+school,SERVICE_AT_RISK,riverine_flood,"Confirm the school can serve as the assembly point: water, latrines, roof.",DEO,72
+school,FLOOD_EXPOSED,riverine_flood,"Lift records and desks above the expected flood level; suspend classes if severity rises.",DEO,24
+water_point,SERVICE_AT_RISK,riverine_flood,"Test and chlorinate the alternate source serving the cut-off side.",district water officer,48
+water_point,FLOOD_EXPOSED,riverine_flood,"Mark the source contaminated once floodwater reaches it and announce the substitute source.",district water officer,24
