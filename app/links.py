@@ -19,9 +19,11 @@ Later sub-steps (geometric crossing synthesis, link inference, propagation
 repoint) will be appended to this module behind their own tests.
 """
 import csv
+import itertools
 import json
 import math
 import os
+from collections import defaultdict
 
 try:                       # `uvicorn app.main:app` / `python -m pytest` (package)
     from app import db
@@ -557,6 +559,56 @@ def infer_access_and_serves(serves_max_m=SERVES_MAX_M):
     return report
 
 
+# ---------------------------------------------------------------------------
+# Sub-step 3d: connect the road network THROUGH its crossings (D-031).
+#
+# In OSM a bridge is its own way. Ingest turns that way into a type="bridge"
+# object, NOT a road_segment - so the approach road and the continuing road each
+# share a node with the bridge way but share NO node with each other. Vertex-based
+# `connects` therefore never joins them, and the two river banks end up as
+# separate components of the road graph: no vehicle route ever crosses the river.
+# (Measured on the real Manafwa graph: components of 72 and 67 segments; only
+# 10 of 83 settlements had any baseline road path to their serving clinic.)
+#
+# Fix: roads that `carries` the SAME crossing are mutually `connects`, through it.
+# When the crossing blocks, every carrier is SEVERED and _road_adj drops all edges
+# touching a severed road - so this edge disappears exactly when the crossing
+# fails. The engine needs no change.
+#
+# Footpath crossings never receive `carries` (09 gate), so they never join the
+# vehicle graph here either.
+# ---------------------------------------------------------------------------
+
+def infer_crossing_connects():
+    """connects roads that carry the same crossing. Idempotent. Report dict."""
+    report = {"via_crossing": 0, "crossings_joined": 0}
+    with db.conn() as c:
+        c.execute("DELETE FROM links WHERE type='connects' "
+                  "AND inferred_by='via_crossing'")
+        existing = set()
+        carriers = defaultdict(list)
+        for l in db.links(c):
+            if l["type"] == "connects":
+                existing.add(tuple(sorted((l["src"], l["dst"]))))
+            elif l["type"] == "carries":
+                carriers[l["dst"]].append(l["src"])
+
+        for xid in sorted(carriers):
+            roads = sorted(set(carriers[xid]))
+            joined = False
+            for a, b in itertools.combinations(roads, 2):
+                pair = tuple(sorted((a, b)))
+                if pair in existing:
+                    continue          # already share a vertex; don't clobber it
+                db.add_link(c, pair[0], pair[1], "connects", "via_crossing")
+                existing.add(pair)
+                report["via_crossing"] += 1
+                joined = True
+            if joined:
+                report["crossings_joined"] += 1
+    return report
+
+
 if __name__ == "__main__":
     import sys
     db.init()
@@ -587,8 +639,11 @@ if __name__ == "__main__":
     if mode in ("reach", "all"):
         print("== infer reachability graph (connects / access_via / serves) ==")
         n = infer_road_network()
+        x = infer_crossing_connects()
         a = infer_access_and_serves()
-        print(f"  connects links: {n['connects']}")
+        print(f"  connects links (shared vertex): {n['connects']}")
+        print(f"  connects links (through crossings): {x['via_crossing']} "
+              f"across {x['crossings_joined']} crossing(s)")
         print(f"  access_via links: {a['access_via']} "
               f"(farthest attach {a['max_access_m']:.0f} m)")
         print(f"  serves links: {a['serves']}")

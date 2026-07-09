@@ -13,8 +13,9 @@ Correctness properties this file must hold (each has a test):
   * A severed road is untraversable, including as a path's first or last hop.
     Otherwise a village whose own access road is severed can read "reachable".
 """
+import itertools
 import json
-from collections import deque
+from collections import defaultdict, deque
 
 from . import db
 from .ontology import (BLOCKING_BRIDGE_STATES, FLOODPLAIN_STATE,
@@ -32,11 +33,23 @@ def _graph():
     return objs, by_type
 
 
-def _road_adj(by_type, severed):
-    """Adjacency over non-severed roads. Severed roads are dropped entirely."""
+def _road_adj(by_type, removed=(), cut_pairs=()):
+    """Adjacency over traversable roads.
+
+    Two distinct effects of a blocked crossing (D-034):
+      * `cut_pairs` - the crossing EDGE between the roads either side of it is
+        removed. The roads themselves stay traversable: a bridge failing does
+        not stop you driving along its approach road to a school on your own bank.
+      * `removed` - roads we cannot break locally (a crossing sitting mid-way
+        through a single road with no second carrier) are dropped entirely. That
+        over-states the break, which is the safe direction.
+    """
+    removed, cut = set(removed), set(cut_pairs)
     adj = {}
     for a, b in by_type.get("connects", []):
-        if a in severed or b in severed:
+        if a in removed or b in removed:
+            continue
+        if tuple(sorted((a, b))) in cut:
             continue
         adj.setdefault(a, set()).add(b)
         adj.setdefault(b, set()).add(a)
@@ -112,16 +125,30 @@ def run(hazard_id: int) -> dict:
             if rid == reach_id:
                 hit(oid, fp_state, [f"hazard:{kind}/{sev}", reach_id, oid])
 
-    # 2) severed roads (roads carrying blocked bridges)
-    severed = {}
+    # 2) severed roads (roads carrying blocked bridges). A road carrying a
+    #    blocked crossing is SEVERED (impact state). How that break is applied to
+    #    the network depends on how many roads the crossing joins (D-034):
+    #      >= 2 carriers -> cut the crossing edge between them, roads survive
+    #       1 carrier    -> the break is mid-road and cannot be localised; drop it
+    carriers_of = defaultdict(list)
     for road, bid in by_type.get("carries", []):
-        if bid in blocked_bridges:
+        carriers_of[bid].append(road)
+
+    severed, removed_roads, cut_pairs = {}, set(), set()
+    for bid in sorted(blocked_bridges):
+        roads = sorted(set(carriers_of.get(bid, [])))
+        for road in roads:
             severed[road] = bid
             hit(road, "SEVERED", [f"hazard:{kind}/{sev}", reach_id, bid, road])
+        if len(roads) >= 2:
+            for a, b in itertools.combinations(roads, 2):
+                cut_pairs.add(tuple(sorted((a, b))))
+        elif len(roads) == 1:
+            removed_roads.add(roads[0])
 
     # 3) settlement reachability to the facilities that serve them
-    adj_before = _road_adj(by_type, set())
-    adj_after = _road_adj(by_type, set(severed))
+    adj_before = _road_adj(by_type)
+    adj_after = _road_adj(by_type, removed_roads, cut_pairs)
     access = {}
     for s, r in by_type.get("access_via", []):
         access.setdefault(s, []).append(r)
@@ -129,63 +156,67 @@ def run(hazard_id: int) -> dict:
     for fac, settlement in by_type.get("serves", []):
         serves.setdefault(settlement, []).append(fac)
 
+    # 09 step 4 is PER FACILITY: "test whether any path ... reaches EACH facility
+    # that serves it. No path at all -> ISOLATED." Pooling facilities and taking
+    # the minimum hop count silently hides the loss of one of them - a village
+    # that loses its clinic but keeps its local school would report nothing.
+    # That is an under-warning (D-032).
     facility_lost = {}
+    blocking_by_fac = {}
     for st_id in sorted(serves):
         facs = sorted(serves[st_id])
         entries = access.get(st_id, [])
-        # a severed road cannot be a start or a goal - not even a zero-hop one
-        entries_after = [r for r in entries if r not in severed]
+        # a road dropped from the network cannot be a start or a goal - not even
+        # a zero-hop one. (A road that is merely cut at its crossing survives.)
+        entries_after = [r for r in entries if r not in removed_roads]
 
-        best_before, base_path, base_fac = None, [], None
-        best_after, alt_path, alt_fac = None, [], None
         for fac in facs:
             goals = access.get(fac, [])
-            goals_after = [g for g in goals if g not in severed]
+            goals_after = [g for g in goals if g not in removed_roads]
             hb, pb = _hops(adj_before, entries, goals)
             ha, pa = _hops(adj_after, entries_after, goals_after)
-            if hb is not None and (best_before is None or hb < best_before):
-                best_before, base_path, base_fac = hb, pb, fac
-            if ha is not None and (best_after is None or ha < best_after):
-                best_after, alt_path, alt_fac = ha, pa, fac
-            if hb is not None and ha is None:
+
+            if hb is None:
+                # never had a road route to this facility: a data/coverage gap,
+                # not an impact of this hazard. It must NOT make the facility
+                # SERVICE_AT_RISK either (D-033).
+                continue
+            if ha is not None and ha <= hb:
+                continue                      # unaffected
+
+            # invariant 2: name the crossing that actually blocks THIS
+            # settlement's route to THIS facility - the first severed road along
+            # its baseline path, and the bridge that severed that road.
+            blocking_road = next((r for r in pb if r in severed), None)
+            if blocking_road is None:
+                blocking_road = next((r for r in entries if r in severed), None)
+            blocking_bridge = severed.get(blocking_road) if blocking_road else None
+
+            chain = [f"hazard:{kind}/{sev}", reach_id]
+            if blocking_bridge:
+                chain.append(blocking_bridge)
+            if blocking_road:
+                chain.append(blocking_road)
+            chain += [st_id, fac]
+
+            if ha is None:
+                hit(st_id, "ISOLATED", chain)
                 facility_lost.setdefault(fac, []).append(st_id)
+                if blocking_bridge:
+                    blocking_by_fac.setdefault(fac, set()).add(blocking_bridge)
+            else:                              # ha > hb: a longer way round
+                hit(st_id, "REROUTED",
+                    chain + ["alternate_via:" + ">".join(pa)])
 
-        if best_before is None:
-            continue  # settlement had no baseline access; data gap, not an impact
-
-        # invariant 2: name the crossing that actually blocks THIS settlement's
-        # baseline route - the first severed road along it, and the bridge that
-        # severed that road. (If the settlement is isolated or rerouted, its
-        # baseline path necessarily contains a severed road.)
-        blocking_road = next((r for r in base_path if r in severed), None)
-        if blocking_road is None and entries and entries_after != entries:
-            blocking_road = next((r for r in entries if r in severed), None)
-        blocking_bridge = severed.get(blocking_road) if blocking_road else None
-
-        chain = [f"hazard:{kind}/{sev}", reach_id]
-        if blocking_bridge:
-            chain.append(blocking_bridge)
-        if blocking_road:
-            chain.append(blocking_road)
-        chain.append(st_id)
-
-        if best_after is None:
-            hit(st_id, "ISOLATED", chain + ([base_fac] if base_fac else []))
-            for fac in facs:
-                facility_lost.setdefault(fac, [])
-                if st_id not in facility_lost[fac]:
-                    facility_lost[fac].append(st_id)
-        elif best_after > best_before:
-            reroute = chain + ([alt_fac] if alt_fac else [])
-            reroute.append("alternate_via:" + ">".join(alt_path))
-            hit(st_id, "REROUTED", reroute)
-
-    # 4) facilities whose communities lost access
+    # 4) facilities whose communities lost access. Only settlements that HAD
+    #    baseline access and lost it count (D-033); the chain names the crossings.
     for fac in sorted(facility_lost):
-        lost = sorted(facility_lost[fac])
-        if lost:
-            hit(fac, "SERVICE_AT_RISK",
-                [f"hazard:{kind}/{sev}", reach_id] + lost + [fac])
+        lost = sorted(set(facility_lost[fac]))
+        if not lost:
+            continue
+        bridges = sorted(blocking_by_fac.get(fac, ()))
+        hit(fac, "SERVICE_AT_RISK",
+            [f"hazard:{kind}/{sev}", reach_id] + bridges + lost + [fac])
 
     # persist
     with db.conn() as c:
