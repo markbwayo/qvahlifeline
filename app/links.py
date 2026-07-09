@@ -337,18 +337,33 @@ def synthesise_crossings(threshold_m=SYNTH_CLUSTER_M):
 #   crosses  (bridge -> river_reach): the crossing links to the NEAREST reach
 #            within ~50 m - the channel it physically spans.
 #   carries  (road_segment -> bridge): every VEHICLE road whose line passes
-#            within ~15 m of the crossing carries it. 15 m is tuned so the two
-#            town bridges (19.8 m apart) don't cross-link to each other's road,
-#            while both segments of a road that splits at a bridge (~0 m) are kept.
+#            within CARRIES_THRESHOLD_M of the crossing carries it, PLUS a
+#            fallback: any crossing left with zero carriers after that primary
+#            pass attaches to its single nearest vehicle road within
+#            CARRIES_FALLBACK_M (flagged inferred_by='geom_carries_fallback').
 #
-# Footpath crossings get crosses but NOT carries (09 crossing_class gate).
-# Synth crossings get both, unclassified - so an unclassified crossing can sever
-# a route (the conservative rule wired later decides whether it does).
-# Deterministic; idempotent (rebuilds only its own geom_* links). See 09 / D-024.
+# CARRIES_THRESHOLD_M = 20 m, set from real measured data on the Manafwa town
+# cluster (two bridges 19.8 m apart): the demo spine w128611448's true nearest
+# road is 17.7 m away; the OTHER bridge's road sits at 23.9 m. 15 m excluded the
+# spine's own carrier entirely (a wrong-impact bug, fixed here); 20 m sits inside
+# that real (17.7, 23.9) gap with margin on both sides. See D-026.
+#
+# The fallback exists because a crossing with zero carriers can never sever a
+# road - if it's really the only route to a clinic, propagation would silently
+# miss the isolation (the same false-negative class needs_review guards against).
+# It is a last resort, not a substitute for the primary geometric match, and its
+# links are flagged distinctly so they can be reviewed.
+#
+# Footpath crossings get crosses but NOT carries, primary or fallback (09
+# crossing_class gate). Synth crossings get both, unclassified - so an
+# unclassified crossing can sever a route (the conservative rule wired later
+# decides whether it does).
+# Deterministic; idempotent (rebuilds only its own geom_* links). See 09 / D-024, D-026.
 # ---------------------------------------------------------------------------
 
 CROSSES_THRESHOLD_M = 50.0
-CARRIES_THRESHOLD_M = 15.0        # < 19.8 m town-bridge separation, on purpose
+CARRIES_THRESHOLD_M = 20.0        # real gap: spine's own road 17.7 m, other bridge's road 23.9 m
+CARRIES_FALLBACK_M = 100.0        # last-resort nearest-road attach if primary finds nothing
 
 
 def _pt_seg_dist_m(p, a, b):
@@ -372,19 +387,24 @@ def _pt_poly_dist_m(pt, poly):
 
 
 def infer_crossing_links(crosses_threshold_m=CROSSES_THRESHOLD_M,
-                         carries_threshold_m=CARRIES_THRESHOLD_M):
-    """Infer crosses + carries. Idempotent. Returns a report dict."""
-    report = {"crosses": 0, "carries": 0, "footpath_skipped": 0, "no_carrier": []}
+                         carries_threshold_m=CARRIES_THRESHOLD_M,
+                         carries_fallback_m=CARRIES_FALLBACK_M):
+    """Infer crosses + carries (primary pass + nearest-road fallback for any
+    crossing left with zero carriers). Idempotent. Returns a report dict."""
+    report = {"crosses": 0, "carries": 0, "footpath_skipped": 0,
+              "fallback_used": [], "no_carrier": []}
     with db.conn() as c:
         objs = db.objects(c)
         byid = {o["id"]: o for o in objs}
         crossings = [o for o in objs if o["type"] == "bridge"]
         reaches = [o for o in objs if o["type"] == "river_reach"]
-        roads = [o for o in objs if o["type"] == "road_segment"]
+        vroads = [o for o in objs
+                 if o["type"] == "road_segment" and _is_vehicle_road(o)]
 
         # rebuild only our own inferred links (preserve manual/other overrides)
         c.execute("DELETE FROM links WHERE type='crosses' AND inferred_by='geom_crosses'")
-        c.execute("DELETE FROM links WHERE type='carries' AND inferred_by='geom_carries'")
+        c.execute("DELETE FROM links WHERE type='carries' "
+                  "AND inferred_by IN ('geom_carries','geom_carries_fallback')")
 
         for x in crossings:
             xpt = (x["lat"], x["lon"])
@@ -399,7 +419,8 @@ def infer_crossing_links(crosses_threshold_m=CROSSES_THRESHOLD_M,
                 db.add_link(c, x["id"], best_r["id"], "crosses", "geom_crosses")
                 report["crosses"] += 1
 
-            # carries: footpath crossings never carry a vehicle road (09 gate)
+            # carries: footpath crossings never carry a vehicle road (09 gate),
+            # primary or fallback.
             if x["props"].get("crossing_class") == "footpath":
                 report["footpath_skipped"] += 1
                 continue
@@ -408,15 +429,30 @@ def infer_crossing_links(crosses_threshold_m=CROSSES_THRESHOLD_M,
             srid = x["props"].get("synth_road_id")       # synth: its own road
             if srid and srid in byid:
                 carriers.add(srid)
-            for rd in roads:
-                if not _is_vehicle_road(rd):
-                    continue
-                if _pt_poly_dist_m(xpt, _geom(rd)) <= carries_threshold_m:
+            road_dists = []
+            for rd in vroads:
+                d = _pt_poly_dist_m(xpt, _geom(rd))
+                road_dists.append((d, rd))
+                if d <= carries_threshold_m:
                     carriers.add(rd["id"])
+
             for rid in carriers:
                 db.add_link(c, rid, x["id"], "carries", "geom_carries")
                 report["carries"] += 1
+
             if not carriers:
+                # fallback: attach the single nearest vehicle road, if any is
+                # within the wider last-resort cap. A crossing that never
+                # carries anything can never sever a route - silently leaving
+                # it unlinked risks a missed isolation.
+                if road_dists:
+                    fd, fr = min(road_dists, key=lambda t: t[0])
+                    if fd <= carries_fallback_m:
+                        db.add_link(c, fr["id"], x["id"], "carries",
+                                   "geom_carries_fallback")
+                        report["carries"] += 1
+                        report["fallback_used"].append((x["id"], fr["id"], round(fd, 1)))
+                        continue
                 report["no_carrier"].append(x["id"])
     return report
 
@@ -541,8 +577,12 @@ if __name__ == "__main__":
         rep = infer_crossing_links()
         print(f"  crosses links: {rep['crosses']}   carries links: {rep['carries']}")
         print(f"  footpath crossings skipped for carries: {rep['footpath_skipped']}")
+        if rep["fallback_used"]:
+            print(f"  carries via FALLBACK (review these) ({len(rep['fallback_used'])}):")
+            for xid, rid, d in rep["fallback_used"]:
+                print(f"     {xid} -> {rid}  ({d} m)")
         if rep["no_carrier"]:
-            print(f"  crossings with NO carrier ({len(rep['no_carrier'])}): "
+            print(f"  crossings with NO carrier at all ({len(rep['no_carrier'])}): "
                   f"{rep['no_carrier']}")
     if mode in ("reach", "all"):
         print("== infer reachability graph (connects / access_via / serves) ==")
