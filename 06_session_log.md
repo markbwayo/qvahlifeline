@@ -3,6 +3,20 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 12 — Step B sub-step 4: demo hazard on the real Manafwa reach
+- What changed: hazards.py demo now targets w188321163 via resolve_demo_reach()
+  (env -> real -> seed -> raise); create_hazard validates target existence and type;
+  D-028 + D-029 logged.
+- Tested + result: tests/test_demo_hazard.py (14 new) + prior = 63 passed. Live
+  propagation at emergency on the real graph: <fill states + counts>.
+- Known defect (fix in sub-step 5): propagate.py builds a settlement's why-chain from
+  an ARBITRARY severed road (`next(iter(severed))`), not the one on that settlement's
+  blocked path. State is correct; the explanation can name the wrong bridge.
+- Days to deadline: 22 (internal 30 Jul).
+- NEXT STEP: sub-step 5 — prove the spine: assert the settlements whose only clinic
+  route crosses the Manafwa town bridges go ISOLATED with a CORRECT why-chain, and
+  villages with an alternate route go REROUTED. Fix the arbitrary-severed-road bug.
+
 ## Session 11 — Step B sub-step 3c: conservative unknown-structure fragility (D-027)
 - What changed: ontology.py gains resolve_structure() + bridge_state_explained() and
   UNKNOWN_STRUCTURE_ASSUMPTION="ford"; propagate.py drops its unsafe "bridge" default
