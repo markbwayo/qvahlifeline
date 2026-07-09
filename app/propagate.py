@@ -8,8 +8,8 @@ import json
 from collections import deque
 
 from . import db
-from .ontology import (BLOCKING_BRIDGE_STATES, FLOODPLAIN_STATE, bridge_state,
-                       worse)
+from .ontology import (BLOCKING_BRIDGE_STATES, FLOODPLAIN_STATE,
+                       bridge_state_explained, worse)
 
 
 def _graph():
@@ -74,9 +74,18 @@ def run(hazard_id: int) -> dict:
     for bid, rid in by_type.get("crosses", []):
         if rid != reach_id:
             continue
-        st = bridge_state(objs[bid]["props"].get("structure", "bridge"), kind, sev)
+        # NOTE: no "bridge" default here. An unclassified crossing must NOT be
+        # scored as the least-fragile structure; ontology.resolve_structure
+        # applies the conservative most-fragile assumption instead (D-027).
+        st, eff, assumed = bridge_state_explained(
+            objs[bid]["props"].get("structure"), kind, sev)
         if st != "OK":
-            hit(bid, st, [f"hazard:{kind}/{sev}", reach_id, bid])
+            chain = [f"hazard:{kind}/{sev}", reach_id, bid]
+            if assumed:
+                # invariant 2: the impact explains itself, including the fact
+                # that the structure was unknown and assumed.
+                chain.append(f"assumed_structure:{eff}(unclassified)")
+            hit(bid, st, chain)
         if st in BLOCKING_BRIDGE_STATES:
             blocked_bridges[bid] = st
 
