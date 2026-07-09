@@ -3,6 +3,23 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 10 — Fix: demo spine had zero carriers (D-026)
+- What changed: carries threshold 15m -> 20m (measured: spine's own road 17.7 m,
+  other town bridge's road 23.9 m); added nearest-road fallback (100 m cap,
+  geom_carries_fallback) for any crossing left with zero carriers.
+- Discovered: w128611448 (the demo spine) had ZERO carriers after 3a - a live
+  wrong-impact bug (a flood on the spine would have severed nothing, isolated no
+  one). Caught by running the carrier-check on the real graph before proceeding.
+- Tested + result: tests/test_infer_crossing_links.py + prior = 37 passed, including
+  a regression test locking in the exact real-world gap (18 m captured / 24 m not).
+  Live re-run: w128611448 now carried by <...> via geom_carries. <F> crossings used
+  the fallback: <list>. <N> still with no carrier at all.
+- Days to deadline: 22 (internal 30 Jul).
+- NEXT STEP: sub-step 3c - fix the unsafe bridge_state fallback in ontology.py
+  (structure=None currently defaults to the LEAST fragile "bridge" type; must
+  default to MOST fragile so needs_review/no-carrier crossings can't silently
+  rescue a route). Must land before pointing a hazard at the real reach.
+
 ## Session 9 — Step B sub-step 3b: reachability graph inference
 - What changed: app/links.py gains infer_road_network() (connects) and
   infer_access_and_serves() (access_via + serves); 09 -> v0.5 (access_via covers
