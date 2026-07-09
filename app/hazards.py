@@ -10,6 +10,12 @@ Phase 2 (LIVE, USE_LIVE=1): daily scan of
     screening levels and say so (see 04.D).
   - CHIRPS accumulation triggers for extreme_rain (via ClimateSERV or direct tiles).
 Cache every response in db.geocache. Deterministic thresholds only - no model.
+
+Target safety (D-028): a hazard whose target_id does not exist as an object
+produces ZERO impacts - propagation simply matches nothing. That is a silent
+false all-clear, the one failure mode this product exists to prevent. So
+create_hazard REFUSES an unknown target, and refuses a target that is not a
+river_reach for riverine_flood. Never fail toward all-clear.
 """
 import os
 
@@ -17,9 +23,75 @@ from . import db
 
 USE_LIVE = os.environ.get("USE_LIVE", "0") == "1"
 
+SEVERITIES = ("watch", "alert", "emergency")
+
+# The demo spine's reach: the Manafwa channel crossed by BOTH town bridges -
+# w128611448 (Manafwa Bridge, B112 tarmac) and w902422828 (Old Manafwa bridge,
+# C870). A hazard here hits the crossing pair together, which is the real SPOF.
+REAL_DEMO_REACH_ID = "w188321163"
+# Phase 0 seed graph's river, kept so the seed demo and its tests still run.
+SEED_DEMO_REACH_ID = "R1"
+
+
+def _objects_by_id(c=None):
+    return {o["id"]: o for o in db.objects(c)}
+
+
+def require_reach(reach_id, c=None):
+    """Raise unless reach_id exists AND is a river_reach. Returns the object.
+
+    Called before any riverine_flood hazard is created. A missing or mistyped
+    target would otherwise yield a hazard that propagates to nothing.
+    """
+    objs = _objects_by_id(c)
+    o = objs.get(reach_id)
+    if o is None:
+        reaches = sorted(k for k, v in objs.items() if v["type"] == "river_reach")
+        raise ValueError(
+            f"hazard target {reach_id!r} is not an object in the graph - a hazard "
+            f"on a nonexistent target propagates to nothing (a silent all-clear). "
+            f"Known river_reach ids: {reaches[:10]}"
+            f"{' ...' if len(reaches) > 10 else ''}")
+    if o["type"] != "river_reach":
+        raise ValueError(
+            f"hazard target {reach_id!r} is a {o['type']!r}, not a river_reach; "
+            f"a riverine_flood must target a river reach.")
+    return o
+
+
+def resolve_demo_reach(c=None):
+    """Which reach the demo hazard points at. Explicit, never guessed.
+
+    Order: DEMO_REACH_ID env override -> the real Manafwa reach (if the real
+    graph is loaded) -> the seed graph's R1 -> raise.
+    """
+    env = os.environ.get("DEMO_REACH_ID")
+    if env:
+        require_reach(env, c)          # raises with a helpful list if wrong
+        return env
+    objs = _objects_by_id(c)
+    for cand in (REAL_DEMO_REACH_ID, SEED_DEMO_REACH_ID):
+        o = objs.get(cand)
+        if o is not None and o["type"] == "river_reach":
+            return cand
+    raise ValueError(
+        "no demo river_reach found: expected the real Manafwa reach "
+        f"{REAL_DEMO_REACH_ID!r} or the seed reach {SEED_DEMO_REACH_ID!r}. "
+        "Load the graph (ingest_osm) or seed it before raising a demo hazard.")
+
 
 def create_hazard(kind: str, severity: str, target_id: str,
                   source: str, trigger_detail: str) -> int:
+    """Insert a hazard. Validates severity and target before writing (D-028)."""
+    if severity not in SEVERITIES:
+        raise ValueError(f"severity {severity!r} not in {list(SEVERITIES)}")
+    if kind == "riverine_flood":
+        require_reach(target_id)
+    else:
+        if target_id not in _objects_by_id():
+            raise ValueError(
+                f"hazard target {target_id!r} is not an object in the graph - "
+                f"it would propagate to nothing.")
     with db.conn() as c:
         cur = c.execute(
             "INSERT INTO hazards (kind, severity, target_id, source, "
@@ -35,11 +107,22 @@ def clear_hazards():
         db.clear_derived(c)
 
 
-def demo_flood(severity: str = "alert") -> int:
+def demo_flood(severity: str = "alert", reach_id: str = None) -> int:
+    """Raise the demo riverine flood on the pilot reach.
+
+    NOTE on severity: engineered bridges (structure='bridge') are AT_RISK - not
+    blocking - at 'alert'. The Manafwa town crossing pair are both engineered
+    bridges, so only 'emergency' severs their roads and isolates the south bank.
+    That is the fragility table being honest, not a bug (see 09, D-029).
+    """
+    rid = reach_id or resolve_demo_reach()
+    reach = require_reach(rid)
+    name = reach.get("name") or rid
     return create_hazard(
-        "riverine_flood", severity, "R1", "DEMO",
-        f"Demo trigger: GloFAS-style forecast exceeds return-period threshold "
-        f"({severity}) on River Nakoko within 3 days")
+        "riverine_flood", severity, rid, "DEMO",
+        f"Demo trigger: GloFAS-style forecast exceeds the return-period "
+        f"threshold for {severity} on {name} within 3 days "
+        f"(screening-grade, ~5 km grid)")
 
 
 def scan_live():
@@ -47,4 +130,5 @@ def scan_live():
         return {"status": "live scan disabled (USE_LIVE=0)"}
     raise NotImplementedError(
         "Phase 2: pull Open-Meteo flood API for each river_reach glofas point, "
-        "apply thresholds, create hazards, run propagation + actions.")
+        "apply thresholds, create hazards, run propagation + actions. "
+        "Must call require_reach() on every target before create_hazard (D-028).")
