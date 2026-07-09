@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE TABLE IF NOT EXISTS hazards (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, severity TEXT,
     target_id TEXT, source TEXT, trigger_detail TEXT,
-    created_utc TEXT, active INTEGER DEFAULT 1
+    created_utc TEXT, active INTEGER DEFAULT 1,
+    scope TEXT DEFAULT 'reach'
 );
 CREATE TABLE IF NOT EXISTS impacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT, hazard_id INTEGER, object_id TEXT,
@@ -46,9 +47,25 @@ def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+# Additive, idempotent column migrations. CREATE TABLE IF NOT EXISTS never alters
+# an existing table, so a new column must be added explicitly or an already-loaded
+# graph would silently keep the old schema.
+MIGRATIONS = [
+    ("hazards", "scope", "ALTER TABLE hazards ADD COLUMN scope TEXT DEFAULT 'reach'"),
+]
+
+
+def _migrate(c):
+    for table, column, ddl in MIGRATIONS:
+        cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            c.execute(ddl)
+
+
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        _migrate(c)
 
 
 def add_object(c, oid, otype, name, lat, lon, props=None, source="seed"):

@@ -24,6 +24,7 @@ from . import db
 USE_LIVE = os.environ.get("USE_LIVE", "0") == "1"
 
 SEVERITIES = ("watch", "alert", "emergency")
+SCOPES = ("reach", "river")     # see 09 / D-036 and propagate.flooded_reaches
 
 # The demo spine's reach: the Manafwa channel crossed by BOTH town bridges -
 # w128611448 (Manafwa Bridge, B112 tarmac) and w902422828 (Old Manafwa bridge,
@@ -81,10 +82,19 @@ def resolve_demo_reach(c=None):
 
 
 def create_hazard(kind: str, severity: str, target_id: str,
-                  source: str, trigger_detail: str) -> int:
-    """Insert a hazard. Validates severity and target before writing (D-028)."""
+                  source: str, trigger_detail: str, scope: str = "reach") -> int:
+    """Insert a hazard. Validates severity, scope and target before writing.
+
+    `scope` (D-036): 'reach' floods only target_id; 'river' floods the whole
+    vertex-connected channel of the same `waterway` value. A GloFAS discharge
+    spike raises the connected mainstem, not one OSM way - so a demo that floods
+    a single reach lets settlements detour over crossings that would, in reality,
+    also be under water.
+    """
     if severity not in SEVERITIES:
         raise ValueError(f"severity {severity!r} not in {list(SEVERITIES)}")
+    if scope not in SCOPES:
+        raise ValueError(f"scope {scope!r} not in {list(SCOPES)}")
     if kind == "riverine_flood":
         require_reach(target_id)
     else:
@@ -95,8 +105,8 @@ def create_hazard(kind: str, severity: str, target_id: str,
     with db.conn() as c:
         cur = c.execute(
             "INSERT INTO hazards (kind, severity, target_id, source, "
-            "trigger_detail, created_utc, active) VALUES (?,?,?,?,?,?,1)",
-            (kind, severity, target_id, source, trigger_detail, db.now()))
+            "trigger_detail, created_utc, active, scope) VALUES (?,?,?,?,?,?,1,?)",
+            (kind, severity, target_id, source, trigger_detail, db.now(), scope))
         return cur.lastrowid
 
 
@@ -107,22 +117,29 @@ def clear_hazards():
         db.clear_derived(c)
 
 
-def demo_flood(severity: str = "alert", reach_id: str = None) -> int:
+def demo_flood(severity: str = "alert", reach_id: str = None,
+               scope: str = "reach") -> int:
     """Raise the demo riverine flood on the pilot reach.
 
     NOTE on severity: engineered bridges (structure='bridge') are AT_RISK - not
     blocking - at 'alert'. The Manafwa town crossing pair are both engineered
-    bridges, so only 'emergency' severs their roads and isolates the south bank.
-    That is the fragility table being honest, not a bug (see 09, D-029).
+    bridges, so only 'emergency' blocks them (see 09, D-029).
     """
     rid = reach_id or resolve_demo_reach()
     reach = require_reach(rid)
     name = reach.get("name") or rid
+    where = "the connected river channel" if scope == "river" else name
     return create_hazard(
         "riverine_flood", severity, rid, "DEMO",
         f"Demo trigger: GloFAS-style forecast exceeds the return-period "
-        f"threshold for {severity} on {name} within 3 days "
-        f"(screening-grade, ~5 km grid)")
+        f"threshold for {severity} on {where} within 3 days "
+        f"(screening-grade, ~5 km grid)", scope=scope)
+
+
+def demo_flood_river(severity: str = "emergency", reach_id: str = None) -> int:
+    """The demo hazard as it physically behaves: the whole connected river
+    channel in flood, not one OSM way. See D-036."""
+    return demo_flood(severity, reach_id, scope="river")
 
 
 def scan_live():

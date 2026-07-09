@@ -80,6 +80,51 @@ def _hops(adj, starts, goals):
     return None, []
 
 
+def flooded_reaches(objs, target_id, scope):
+    """Which river_reach objects this hazard actually floods (D-036).
+
+    scope='reach' -> only the trigger reach.
+    scope='river' -> the trigger reach plus every reach of the SAME `waterway`
+        value that is vertex-connected to it. GloFAS forecasts discharge on the
+        modelled river channel, so a spike raises the whole connected mainstem -
+        not one OSM way, and not the hillside streams it does not resolve.
+        Tributaries (waterway=stream) are a different hazard (pluvial/extreme_rain)
+        and are excluded; see 04.D.
+
+    Endpoint-only adjacency is not enough: tributaries and continuations join
+    mid-way along a reach, so adjacency is computed on shared VERTICES (~1.1 m).
+    Deterministic: returns a set, and the caller never depends on its order.
+    """
+    if scope != "river":
+        return {target_id}
+    reaches = {i: o for i, o in objs.items() if o["type"] == "river_reach"}
+    tgt = reaches.get(target_id)
+    if tgt is None:
+        return {target_id}
+    ww = (tgt["props"].get("tags") or {}).get("waterway")
+    allow = {i for i, o in reaches.items()
+             if (o["props"].get("tags") or {}).get("waterway") == ww}
+    allow.add(target_id)
+
+    vert = defaultdict(set)
+    for rid in allow:
+        for pt in (reaches[rid]["props"].get("geometry") or []):
+            vert[(round(pt[0], 5), round(pt[1], 5))].add(rid)
+    adj = defaultdict(set)
+    for ids in vert.values():
+        for a in ids:
+            adj[a] |= (ids - {a})
+
+    seen, stack = set(), [target_id]
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(adj[cur] - seen)
+    return seen
+
+
 def _first_blockage(path, removed_roads, cut_pairs):
     """Walk a baseline path and return (crossing_id, road_id) of the FIRST thing
     that blocks it: a road dropped from the network, or a cut crossing edge
@@ -106,6 +151,9 @@ def run(hazard_id: int) -> dict:
 
     objs, by_type = _graph()
     kind, sev, reach_id = hz["kind"], hz["severity"], hz["target_id"]
+    keys = hz.keys()
+    scope = (hz["scope"] if "scope" in keys and hz["scope"] else "reach")
+    flooded = flooded_reaches(objs, reach_id, scope)
     impacts = {}   # object_id -> (state, why_chain)
 
     def hit(oid, state, chain):
@@ -116,18 +164,21 @@ def run(hazard_id: int) -> dict:
         else:
             impacts[oid] = (state, chain)
 
-    # 1) direct: crossings of the flooded reach
+    # 1) direct: crossings of ANY flooded reach. reach_of[bid] is the reach that
+    #    crossing actually spans, so its why-chain names the right water.
     blocked_bridges = {}
+    reach_of = {}
     for bid, rid in by_type.get("crosses", []):
-        if rid != reach_id:
+        if rid not in flooded:
             continue
+        reach_of[bid] = rid
         # NOTE: no "bridge" default. An unclassified crossing must NOT be scored
         # as the least-fragile structure; ontology.resolve_structure applies the
         # conservative most-fragile assumption instead (D-027).
         st, eff, assumed = bridge_state_explained(
             objs[bid]["props"].get("structure"), kind, sev)
         if st != "OK":
-            chain = [f"hazard:{kind}/{sev}", reach_id, bid]
+            chain = [f"hazard:{kind}/{sev}", rid, bid]
             if assumed:
                 chain.append(f"assumed_structure:{eff}(unclassified)")
             hit(bid, st, chain)
@@ -138,8 +189,8 @@ def run(hazard_id: int) -> dict:
     fp_state = FLOODPLAIN_STATE.get(sev)
     if fp_state:
         for oid, rid in by_type.get("on_floodplain", []):
-            if rid == reach_id:
-                hit(oid, fp_state, [f"hazard:{kind}/{sev}", reach_id, oid])
+            if rid in flooded:
+                hit(oid, fp_state, [f"hazard:{kind}/{sev}", rid, oid])
 
     # 2) apply each blocked crossing to the road network (D-035).
     #
@@ -168,7 +219,8 @@ def run(hazard_id: int) -> dict:
         elif len(roads) == 1:
             road = roads[0]
             removed_roads[road] = bid
-            hit(road, "SEVERED", [f"hazard:{kind}/{sev}", reach_id, bid, road])
+            hit(road, "SEVERED",
+                [f"hazard:{kind}/{sev}", reach_of.get(bid, reach_id), bid, road])
 
     # 3) settlement reachability to the facilities that serve them
     adj_before = _road_adj(by_type)
@@ -187,6 +239,7 @@ def run(hazard_id: int) -> dict:
     # That is an under-warning (D-032).
     facility_lost = {}
     blocking_by_fac = {}
+    lost_by_type = {}          # facility type -> settlements that lost it
     for st_id in sorted(serves):
         facs = sorted(serves[st_id])
         entries = access.get(st_id, [])
@@ -220,7 +273,8 @@ def run(hazard_id: int) -> dict:
                         blocking_bridge, blocking_road = removed_roads[r], r
                         break
 
-            chain = [f"hazard:{kind}/{sev}", reach_id]
+            chain = [f"hazard:{kind}/{sev}",
+                     reach_of.get(blocking_bridge, reach_id)]
             if blocking_bridge:
                 chain.append(blocking_bridge)
             if blocking_road:
@@ -229,6 +283,7 @@ def run(hazard_id: int) -> dict:
 
             if ha is None:
                 hit(st_id, "ISOLATED", chain)
+                lost_by_type.setdefault(objs[fac]["type"], set()).add(st_id)
                 facility_lost.setdefault(fac, []).append(st_id)
                 if blocking_bridge:
                     blocking_by_fac.setdefault(fac, set()).add(blocking_bridge)
@@ -253,4 +308,6 @@ def run(hazard_id: int) -> dict:
             c.execute("INSERT INTO impacts (hazard_id, object_id, state, "
                       "why_chain_json, created_utc) VALUES (?,?,?,?,?)",
                       (hazard_id, oid, state, json.dumps(chain), db.now()))
-    return {"hazard_id": hazard_id, "impacts": len(impacts)}
+    return {"hazard_id": hazard_id, "impacts": len(impacts),
+            "scope": scope, "flooded_reaches": len(flooded),
+            "isolated_from": {t: len(v) for t, v in sorted(lost_by_type.items())}}
