@@ -3,6 +3,21 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 11 — Step B sub-step 3c: conservative unknown-structure fragility (D-027)
+- What changed: ontology.py gains resolve_structure() + bridge_state_explained() and
+  UNKNOWN_STRUCTURE_ASSUMPTION="ford"; propagate.py drops its unsafe "bridge" default
+  and records assumed_structure in the why-chain. ontology -> v0.2; 09 -> v0.6.
+- Bug closed: at ALERT an unclassified crossing scored AT_RISK (non-severing) -> no
+  road severed -> no village isolated. A false all-clear on all 18 synth crossings.
+  Now LIKELY_IMPASSABLE -> severs. Engineered bridges unchanged.
+- Tested + result: tests/test_conservative_fragility.py (12 new: unit + real-engine
+  integration + why-chain assertions) + prior = 49 passed. Includes a test proving the
+  assumed structure is at least as fragile as EVERY known structure at every severity.
+- Days to deadline: 22 (internal 30 Jul).
+- NEXT STEP: sub-step 4 — point the demo hazard at the real Manafwa reach w188321163
+  (replace seed id R1 in hazards.py), run propagation on the real graph, inspect which
+  settlements come back ISOLATED / REROUTED.
+
 ## Session 10 — Fix: demo spine had zero carriers (D-026)
 - What changed: carries threshold 15m -> 20m (measured: spine's own road 17.7 m,
   other town bridge's road 23.9 m); added nearest-road fallback (100 m cap,

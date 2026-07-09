@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v0.5 (THE core artifact)
+# 09 — Ontology Specification v0.6 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -67,7 +67,7 @@ Inference is rules-first; ambiguous cases go to the operator (or the AI edge pro
 human confirms). Every link stores `inferred_by` and can be manually overridden —
 committee knowledge always outranks the algorithm.
 
-## Fragility rules v0.1 (deterministic; versioned; my engineering judgement, tunable)
+## Fragility rules v0.2 (deterministic; versioned; my engineering judgement, tunable)
 `(object_type, structure, hazard_kind, severity) → state`
 - bridge/ford/causeway + riverine_flood: watch → AT_RISK; alert → LIKELY_IMPASSABLE;
   emergency → IMPASSABLE. Engineered bridge: watch → OK; alert → AT_RISK;
@@ -75,6 +75,17 @@ committee knowledge always outranks the algorithm.
 - road_segment (not all_weather) + extreme_rain ≥ alert → DEGRADED.
 - settlement/asset with `on_floodplain` link to a flooded reach: severity ≥ alert →
   FLOOD_EXPOSED.
+### Unknown-structure rule (v0.6)
+- A crossing whose `structure` is missing or unrecognised (e.g. a `source=synth`,
+  `needs_review` crossing) is scored as the **most fragile** known structure (`ford`),
+  never the least. Encoded as `ontology.UNKNOWN_STRUCTURE_ASSUMPTION`.
+- Rationale: base rate (an unmapped rural crossing is more likely a ford/culvert than
+  an engineered bridge) plus asymmetric cost (a false "may be out" costs an inspection;
+  a false "all clear" leaves a village unwarned). **Never fail toward all-clear.**
+- The substitution is declared in the why-chain as `assumed_structure:ford(unclassified)`,
+  so no impact hides the fact that its structure was unknown (invariant 2).
+- A table miss on *hazard kind* still yields OK — that hazard genuinely doesn't act on
+  the object. Only a miss on *structure* triggers the conservative assumption.
 
 ## Propagation (the engine, deterministic BFS)
 1. Hazard on river_reach R at severity S.
