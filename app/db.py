@@ -37,16 +37,6 @@ CREATE TABLE IF NOT EXISTS geocache (
 """
 
 
-def conn():
-    c = sqlite3.connect(DB_PATH)
-    c.row_factory = sqlite3.Row
-    return c
-
-
-def now():
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
 # Additive, idempotent column migrations. CREATE TABLE IF NOT EXISTS never alters
 # an existing table, so a new column must be added explicitly or an already-loaded
 # graph would silently keep the old schema.
@@ -62,7 +52,30 @@ def _migrate(c):
             c.execute(ddl)
 
 
+# Paths whose schema has been ensured in THIS process. Schema must never lag the
+# code: a migration that only runs when someone remembers to call init() will be
+# missed by scripts, cron jobs and the scheduler (D-037).
+_schema_ready = set()
+
+
+def conn():
+    c = sqlite3.connect(DB_PATH)
+    c.row_factory = sqlite3.Row
+    if DB_PATH not in _schema_ready:
+        c.executescript(SCHEMA)      # CREATE TABLE IF NOT EXISTS - cheap, idempotent
+        _migrate(c)                  # additive column migrations
+        c.commit()
+        _schema_ready.add(DB_PATH)
+    return c
+
+
+def now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def init():
+    """Explicit schema setup. conn() now does this lazily too, so init() is a
+    no-op on an already-current database - kept for clarity at startup."""
     with conn() as c:
         c.executescript(SCHEMA)
         _migrate(c)

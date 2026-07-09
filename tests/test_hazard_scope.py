@@ -18,6 +18,7 @@ from app import db, hazards, propagate
 def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.delenv("DEMO_REACH_ID", raising=False)
+    db._schema_ready.discard(str(tmp_path / "test.db"))
     db.init()
     return tmp_path
 
@@ -39,19 +40,56 @@ def test_scope_column_exists_after_init(fresh_db):
     assert "scope" in cols
 
 
-def test_migration_adds_scope_to_a_pre_existing_table(tmp_path, monkeypatch):
-    """The real DB was created before `scope` existed. CREATE TABLE IF NOT EXISTS
-    would silently leave the old schema in place."""
-    monkeypatch.setattr(db, "DB_PATH", str(tmp_path / "old.db"))
-    with db.conn() as c:                      # simulate the OLD hazards table
-        c.execute("CREATE TABLE hazards (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                  "kind TEXT, severity TEXT, target_id TEXT, source TEXT, "
-                  "trigger_detail TEXT, created_utc TEXT, active INTEGER DEFAULT 1)")
-    db.init()                                  # must migrate, not skip
+def test_conn_migrates_without_an_explicit_init_call(tmp_path, monkeypatch):
+    """The live failure (D-037): the real DB predates the `scope` column, and an
+    ad-hoc script that imports db and calls create_hazard() never runs init().
+    conn() must bring the schema current by itself."""
+    path = str(tmp_path / "legacy.db")
+    monkeypatch.setattr(db, "DB_PATH", path)
+    db._schema_ready.discard(path)
+    import sqlite3
+    raw = sqlite3.connect(path)               # an OLD database, no scope column
+    raw.executescript(
+        "CREATE TABLE objects (id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT,"
+        " lat REAL, lon REAL, props_json TEXT DEFAULT '{}', source TEXT DEFAULT 'seed',"
+        " created_utc TEXT);"
+        "CREATE TABLE hazards (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT,"
+        " severity TEXT, target_id TEXT, source TEXT, trigger_detail TEXT,"
+        " created_utc TEXT, active INTEGER DEFAULT 1);")
+    raw.commit(); raw.close()
+
+    # NO db.init() here - exactly what the failing script did.
+    with db.conn() as c:
+        _reach(c, "B", [[0.0, 34.0], [0.01, 34.0]])
+    hid = hazards.create_hazard("riverine_flood", "alert", "B", "T", "d",
+                                scope="river")
+    with db.conn() as c:
+        assert c.execute("SELECT scope FROM hazards WHERE id=?",
+                         (hid,)).fetchone()["scope"] == "river"
+
+
+def test_migration_is_idempotent_on_a_legacy_table(tmp_path, monkeypatch):
+    """A legacy hazards table (no `scope`) is migrated, and migrating twice is safe."""
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    raw = sqlite3.connect(path)               # plant the OLD schema directly
+    raw.executescript(
+        "CREATE TABLE hazards (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT,"
+        " severity TEXT, target_id TEXT, source TEXT, trigger_detail TEXT,"
+        " created_utc TEXT, active INTEGER DEFAULT 1);")
+    raw.commit(); raw.close()
+
+    monkeypatch.setattr(db, "DB_PATH", path)
+    db._schema_ready.discard(path)
+    db.init()
     with db.conn() as c:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(hazards)")}
     assert "scope" in cols
-    db.init()                                  # idempotent: a second run must not fail
+
+    db._schema_ready.discard(path)
+    db.init()                                  # second run must not fail
+    with db.conn() as c:
+        assert "scope" in {r["name"] for r in c.execute("PRAGMA table_info(hazards)")}
 
 
 # --- scope resolution ------------------------------------------------------
