@@ -3,15 +3,78 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
-## Session 13 — Step B sub-step 5 COMPLETE: the spine is proven
+## Session 15 — Hazard scope (D-036); self-healing schema (D-037); STEP B ACTUALLY COMPLETE
+- What changed: propagate.py gains flooded_reaches() and hazards.gains scope
+  (reach|river) + demo_flood_river(); hazards table migrated via a new scope column.
+  db.conn() now self-heals schema+migrations on every connection, not just inside
+  init() — a live crash ("table hazards has no column named scope") showed a
+  migration only run from init() gets missed by ad-hoc scripts. D-036, D-037 logged.
+  09 -> v0.8 (hazard scope block; propagation steps rewritten to match D-034/D-035
+  exactly; new invariant 6: never fail toward all-clear).
+- Why scope existed to fix: Session 13's "complete" result (3 ISOLATED) was itself
+  wrong — diagnosed in this session as two compounding graph defects (D-031: the
+  road network was two disjoint components, no vehicle route crossed the river at
+  all; D-032/033: reachability pooled facilities and mis-attributed SERVICE_AT_RISK).
+  Fixing those first gave 0 ISOLATED / 43 REROUTED at single-reach scope — correct
+  code, but physically wrong: villages were detouring across crossings on the SAME
+  river that a real GloFAS spike would also flood. Scope=river fixes that.
+- REAL RESULT, river scope, emergency severity, 31 connected reaches flooded:
+  ~62 settlements ISOLATED, 0 REROUTED, 2 clinics SERVICE_AT_RISK. Sensitivity
+  checked: widening scope to the 6 touching streams moves ISOLATED 62->63; the
+  district's other named rivers move it not at all — the number is topology, not
+  over-warning tuning. Exact isolated_from breakdown (clinic vs school vs water_point
+  count) still to be captured after the D-037 fix lands on the VPS — do this first in
+  the next session.
+- Tested + result: tests/test_hazard_scope.py (21 new, incl. the exact real-world
+  detour-vs-isolate scenario in miniature, and the no-init() legacy-table regression)
+  + prior = 105 passed.
+- Days to deadline: 21 (internal 30 Jul).
+- NEXT STEP: on the VPS, confirm D-037 fixed the live crash, re-run demo_flood_river,
+  capture the real isolated_from breakdown into this log. Docs (05/06/09) then commit
+  separately from code, per the two-commit convention (see 00 / project instructions).
+  Then Phase 2: actions.py + playbook.csv wired to real impacts (see Session 13's
+  original next-step, still valid), then live GloFAS triggers, then map UI.
+
+## Session 14 — Step B correctness pass: the graph didn't actually connect (D-031..D-035)
+- What changed: links.py gains infer_crossing_connects() (roads carrying the same
+  crossing become mutually `connects` via_crossing — D-031). propagate.py rewritten:
+  reachability evaluated per facility not pooled (D-032); SERVICE_AT_RISK only for
+  settlements that had and lost baseline access (D-033); blocking a multi-carrier
+  crossing cuts the connects EDGE between its roads rather than deleting the roads
+  (D-034), refined so the crossing itself (not the approach roads) holds the
+  impassable state and only a single-carrier crossing severs its one road (D-035).
+- Discovered (diagnostic, not a test - this is why the real-graph check habit
+  matters): Session 13's "3 ISOLATED" result was an artifact. The real road network
+  was TWO DISJOINT COMPONENTS (72 + 67 segments) because in OSM a bridge is its own
+  way, so the approach and continuation roads share no vertex with each other - only
+  10 of 83 settlements had ANY baseline road path to a clinic, before any flood.
+  The 3 "isolated" villages were actually losing a same-bank SCHOOL, and
+  Namuembi Medical Centre's SERVICE_AT_RISK was spurious (villages that could never
+  have reached it). Both a false all-clear risk and a false alarm, simultaneously.
+- Also found and fixed: an alternate REROUTED path could traverse a road that was
+  itself SEVERED ("alternate_via: ...>w169219432>...", w169219432 SEVERED) - fixed by
+  D-035's edge-cut/road-removal split.
+- Tested + result: tests/test_crossing_connects.py (14 new, incl. a live-bug
+  reproduction: old engine gives a village on a severed road NO IMPACT) + prior =
+  87 passed.
+- Days to deadline: 21 (internal 30 Jul).
+- NEXT STEP: with the graph now actually connected, decide hazard scope - single
+  reach lets villages detour over crossings on the same river that would also flood
+  in reality. Simulate candidate scopes before choosing (see Session 15).
+
+## Session 13 — Step B sub-step 5: why-chain + determinism fixes (NOT yet complete —
+  see Sessions 14–15)
 - What changed: propagate.py rewritten for correctness (per-settlement why-chain,
   severed-road endpoints, deterministic sorted BFS, alternate named on REROUTED).
-  D-030 logged. STEP B IS COMPLETE.
+  D-030 logged.
 - FIRST REAL RESULT (emergency on w188321163, real 362-object graph): 18 impacts -
   4 IMPASSABLE + 3 LIKELY_IMPASSABLE crossings, 5 SEVERED roads, 3 ISOLATED
   settlements (Bumufuni Central, Nasitsapi, Bumufuni), 3 SERVICE_AT_RISK facilities
   including Namuembi Medical Centre. The engine found the clinic-access failure on
   its own; the SPOF was not pre-declared.
+  **CORRECTION (Session 14): this result was itself an artifact of a disconnected
+  road graph - see D-031. Do not cite the "3 ISOLATED" number; the real result is
+  Session 15's ~62 ISOLATED at river scope.**
 - Bugs closed: three false-negative paths in the engine, incl. a village on a SEVERED
   road reporting NO IMPACT (a live false all-clear). Regression-tested by running the
   new suite against the old engine (5/10 fail).
