@@ -3,6 +3,15 @@
 Implements knowledge/09 exactly:
  direct fragility -> severed roads -> settlement reachability (ISOLATED/REROUTED)
  -> facility SERVICE_AT_RISK, with a why-chain on every impact (invariant 2).
+
+Correctness properties this file must hold (each has a test):
+  * Invariant 1 - same inputs, same impacts AND same why-chains. All traversal
+    iterates SORTED containers; never a set (str hashes are randomised per
+    process, so set order is not stable across runs).
+  * Invariant 2 - a settlement's why-chain names the crossing that actually
+    blocks THAT settlement's baseline route, not an arbitrary severed road.
+  * A severed road is untraversable, including as a path's first or last hop.
+    Otherwise a village whose own access road is severed can read "reachable".
 """
 import json
 from collections import deque
@@ -18,10 +27,13 @@ def _graph():
     by_type = {}
     for l in lks:
         by_type.setdefault(l["type"], []).append((l["src"], l["dst"]))
+    for t in by_type:                      # determinism (invariant 1)
+        by_type[t].sort()
     return objs, by_type
 
 
 def _road_adj(by_type, severed):
+    """Adjacency over non-severed roads. Severed roads are dropped entirely."""
     adj = {}
     for a, b in by_type.get("connects", []):
         if a in severed or b in severed:
@@ -32,8 +44,14 @@ def _road_adj(by_type, severed):
 
 
 def _hops(adj, starts, goals):
-    """BFS shortest hop-count from any start road to any goal road; None if no path."""
-    starts, goals = set(starts), set(goals)
+    """BFS shortest hop-count from any start road to any goal road.
+
+    Returns (hops, path) or (None, []). Iterates sorted containers so the path -
+    and therefore the why-chain - is identical on every run (invariant 1).
+    Callers must pass starts/goals already filtered of severed roads.
+    """
+    starts = sorted(set(starts))
+    goals = set(goals)
     if not starts or not goals:
         return None, []
     seen = {s: [s] for s in starts}
@@ -42,7 +60,7 @@ def _hops(adj, starts, goals):
         cur = q.popleft()
         if cur in goals:
             return len(seen[cur]), seen[cur]
-        for nxt in adj.get(cur, ()):
+        for nxt in sorted(adj.get(cur, ())):
             if nxt not in seen:
                 seen[nxt] = seen[cur] + [nxt]
                 q.append(nxt)
@@ -74,16 +92,14 @@ def run(hazard_id: int) -> dict:
     for bid, rid in by_type.get("crosses", []):
         if rid != reach_id:
             continue
-        # NOTE: no "bridge" default here. An unclassified crossing must NOT be
-        # scored as the least-fragile structure; ontology.resolve_structure
-        # applies the conservative most-fragile assumption instead (D-027).
+        # NOTE: no "bridge" default. An unclassified crossing must NOT be scored
+        # as the least-fragile structure; ontology.resolve_structure applies the
+        # conservative most-fragile assumption instead (D-027).
         st, eff, assumed = bridge_state_explained(
             objs[bid]["props"].get("structure"), kind, sev)
         if st != "OK":
             chain = [f"hazard:{kind}/{sev}", reach_id, bid]
             if assumed:
-                # invariant 2: the impact explains itself, including the fact
-                # that the structure was unknown and assumed.
                 chain.append(f"assumed_structure:{eff}(unclassified)")
             hit(bid, st, chain)
         if st in BLOCKING_BRIDGE_STATES:
@@ -114,43 +130,67 @@ def run(hazard_id: int) -> dict:
         serves.setdefault(settlement, []).append(fac)
 
     facility_lost = {}
-    for st_id, facs in serves.items():
+    for st_id in sorted(serves):
+        facs = sorted(serves[st_id])
         entries = access.get(st_id, [])
-        best_before, best_after, lost_path_bridge = None, None, None
+        # a severed road cannot be a start or a goal - not even a zero-hop one
+        entries_after = [r for r in entries if r not in severed]
+
+        best_before, base_path, base_fac = None, [], None
+        best_after, alt_path, alt_fac = None, [], None
         for fac in facs:
             goals = access.get(fac, [])
-            hb, _ = _hops(adj_before, entries, goals)
-            ha, _ = _hops(adj_after, entries, goals)
-            if hb is not None:
-                best_before = hb if best_before is None else min(best_before, hb)
-            if ha is not None:
-                best_after = ha if best_after is None else min(best_after, ha)
+            goals_after = [g for g in goals if g not in severed]
+            hb, pb = _hops(adj_before, entries, goals)
+            ha, pa = _hops(adj_after, entries_after, goals_after)
+            if hb is not None and (best_before is None or hb < best_before):
+                best_before, base_path, base_fac = hb, pb, fac
+            if ha is not None and (best_after is None or ha < best_after):
+                best_after, alt_path, alt_fac = ha, pa, fac
             if hb is not None and ha is None:
                 facility_lost.setdefault(fac, []).append(st_id)
+
         if best_before is None:
             continue  # settlement had no baseline access; data gap, not an impact
-        sev_road = next(iter(severed), None)
-        via = [f"hazard:{kind}/{sev}", reach_id,
-               severed.get(sev_road, ""), sev_road or "", st_id]
-        via = [v for v in via if v]
+
+        # invariant 2: name the crossing that actually blocks THIS settlement's
+        # baseline route - the first severed road along it, and the bridge that
+        # severed that road. (If the settlement is isolated or rerouted, its
+        # baseline path necessarily contains a severed road.)
+        blocking_road = next((r for r in base_path if r in severed), None)
+        if blocking_road is None and entries and entries_after != entries:
+            blocking_road = next((r for r in entries if r in severed), None)
+        blocking_bridge = severed.get(blocking_road) if blocking_road else None
+
+        chain = [f"hazard:{kind}/{sev}", reach_id]
+        if blocking_bridge:
+            chain.append(blocking_bridge)
+        if blocking_road:
+            chain.append(blocking_road)
+        chain.append(st_id)
+
         if best_after is None:
-            hit(st_id, "ISOLATED", via)
+            hit(st_id, "ISOLATED", chain + ([base_fac] if base_fac else []))
             for fac in facs:
                 facility_lost.setdefault(fac, [])
                 if st_id not in facility_lost[fac]:
                     facility_lost[fac].append(st_id)
         elif best_after > best_before:
-            hit(st_id, "REROUTED", via)
+            reroute = chain + ([alt_fac] if alt_fac else [])
+            reroute.append("alternate_via:" + ">".join(alt_path))
+            hit(st_id, "REROUTED", reroute)
 
     # 4) facilities whose communities lost access
-    for fac, lost in facility_lost.items():
+    for fac in sorted(facility_lost):
+        lost = sorted(facility_lost[fac])
         if lost:
             hit(fac, "SERVICE_AT_RISK",
                 [f"hazard:{kind}/{sev}", reach_id] + lost + [fac])
 
     # persist
     with db.conn() as c:
-        for oid, (state, chain) in impacts.items():
+        for oid in sorted(impacts):
+            state, chain = impacts[oid]
             c.execute("INSERT INTO impacts (hazard_id, object_id, state, "
                       "why_chain_json, created_utc) VALUES (?,?,?,?,?)",
                       (hazard_id, oid, state, json.dumps(chain), db.now()))
