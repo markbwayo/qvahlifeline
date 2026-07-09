@@ -436,6 +436,52 @@ def test_consequence_counts_only_proved_isolation(fresh_db):
     assert by_obj["B1"] == 0 and by_obj["C1"] > by_obj["B1"]
 
 
+def test_a_service_at_risk_facility_is_never_precautionary(fresh_db):
+    """D-033 grants SERVICE_AT_RISK only to a facility some settlement HAD and LOST.
+    Zero dependents on such a facility is arithmetically impossible.
+
+    The bug this locks: a settlement stores ONE why-chain, so V1 - which lost the
+    clinic, the school and the borehole - records only the clinic. Counting
+    ISOLATED chains alone made S1 and W1 report 0 dependents and flag
+    `precautionary`, next to a shelter check for a school two villages just lost.
+    An under-warning on the officer's screen.
+    """
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    actions.fire_actions(hz, REAL_PLAYBOOK)
+
+    facilities = {"H1", "S1", "W1"}
+    seen = set()
+    for a in actions.actions_for(hz):
+        if a["state"] != "SERVICE_AT_RISK":
+            continue
+        seen.add(a["object_id"])
+        assert a["consequence"] >= 1, f"{a['object_id']} is SERVICE_AT_RISK with 0 dependents"
+        assert a["precautionary"] is False
+    assert seen == facilities        # V1's chain names only H1; S1 and W1 still count
+    with db.conn() as c:
+        dep = actions._dependents(c, hz)
+    assert dep["S1"] == 2 and dep["W1"] == 2 and dep["H1"] == 2
+
+
+def test_a_facility_chain_never_cross_charges_its_bridges(fresh_db):
+    """A facility's chain is [hazard, reach] + bridges + lost + [facility], where
+    `bridges` is a UNION across all its lost settlements. Charging every bridge
+    with every settlement would let one bridge claim villages another blocked -
+    a false why-chain in the over-warning direction. Victims from a facility
+    chain go to the facility alone."""
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    with db.conn() as c:
+        # B1 is blocked but blocks nobody. Forge a SERVICE_AT_RISK chain that
+        # names B1 alongside the real blocker C1, as a two-bridge facility would.
+        c.execute("UPDATE impacts SET why_chain_json=? WHERE hazard_id=? AND object_id='H1'",
+                  ('["hazard:riverine_flood/emergency","R1","B1","C1","V1","V2","H1"]', hz))
+        dep = actions._dependents(c, hz)
+    assert dep["H1"] == 2            # the clinic did lose both villages
+    assert dep.get("B1", 0) == 0     # B1 must not inherit them
+
+
 def test_carriers_field_is_none_for_non_crossings(fresh_db):
     hz = make_hazard("emergency")
     propagate.run(hz)

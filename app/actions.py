@@ -197,20 +197,47 @@ def generate(hazard_id: int) -> dict:
 # ------------------------------------------------------- consequence (read-side, derived)
 
 def _dependents(c, hazard_id):
-    """object_id -> how many ISOLATED settlements name it in their why-chain.
+    """object_id -> how many distinct settlements it is PROVED to have cut off.
 
-    Derived, never stored: it is a fact about the impacts of THIS hazard, and it
-    must be re-derivable from them. Counting is over ISOLATED settlement impacts
-    only - the engine has already proved each of those chains (invariant 2), so
-    membership in one is proof that this object stands between that village and
-    a facility it lost. Nothing is inferred, nothing is modelled.
+    Read off the engine's own why-chains. Nothing inferred, nothing modelled: a
+    chain is already the proof (invariant 2). Two chain families carry the fact,
+    and both must be read.
+
+      * An ISOLATED settlement's chain names the crossing (and road) that blocked
+        THAT settlement's route. Every object in it is charged with that one
+        settlement.
+
+      * A SERVICE_AT_RISK facility's chain lists every settlement that lost it
+        (`[hazard, reach] + bridges + lost + [facility]`). This family is not
+        optional: a settlement stores only ONE chain, so a village that lost its
+        clinic AND its school records only the clinic. Read ISOLATED chains alone
+        and the school reports zero dependents - `precautionary` on a facility
+        that D-033 guarantees lost somebody. An under-warning.
+
+    Victims from a facility chain are charged to the FACILITY ONLY, never to the
+    bridges in it: that bridge list is a union across all the facility's lost
+    settlements, so charging each bridge with each settlement would cross-product
+    them and let w128611448 claim villages that w747829218 actually blocked. A
+    bridge earns a dependent only from the ISOLATED chain that names it.
     """
+    settlements = {r["id"] for r in c.execute(
+        "SELECT id FROM objects WHERE type='settlement'")}
     dep = {}
+
+    def charge(oid, victims):
+        dep.setdefault(oid, set()).update(victims)
+
     for r in c.execute("SELECT object_id, state, why_chain_json FROM impacts "
-                       "WHERE hazard_id=? AND state='ISOLATED'", (hazard_id,)):
-        for oid in set(json.loads(r["why_chain_json"])):
-            dep[oid] = dep.get(oid, 0) + 1
-    return dep
+                       "WHERE hazard_id=?", (hazard_id,)):
+        chain = json.loads(r["why_chain_json"])
+        if r["state"] == "ISOLATED" and r["object_id"] in settlements:
+            for oid in set(chain):
+                charge(oid, {r["object_id"]})
+        elif r["state"] == "SERVICE_AT_RISK":
+            lost = {x for x in chain if x in settlements}
+            charge(r["object_id"], lost)
+
+    return {oid: len(v) for oid, v in dep.items()}
 
 
 def _carrier_counts(c):
@@ -229,7 +256,9 @@ def actions_for(hazard_id: int):
 
     Two derived fields ride along, both computed from the graph and the engine's
     own why-chains:
-      * `consequence` - ISOLATED settlements whose route this object blocks.
+      * `consequence` - distinct settlements this object is proved to have cut
+        off, read from the ISOLATED chains that name it and, for a facility, from
+        its own SERVICE_AT_RISK chain (which lists every settlement that lost it).
       * `carriers`    - vehicle roads linked to this crossing (bridges only).
       * `precautionary` - consequence == 0. The action still fires, and still
         carries its full weight: a flooded ford is a hazard to whoever drives
@@ -238,6 +267,8 @@ def actions_for(hazard_id: int):
         inference never found the road it sits on (7 bare OSM ford nodes have no
         carrier within 100 m). A gap in our data may never silence a warning
         (invariant 6), so the flag explains the action; it does not suppress it.
+        A SERVICE_AT_RISK facility can NEVER be precautionary: D-033 grants that
+        state only to a facility some settlement had and lost. Test-locked.
     """
     with db.conn() as c:
         rows = [dict(r) for r in c.execute(
