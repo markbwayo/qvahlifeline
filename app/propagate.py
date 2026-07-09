@@ -80,6 +80,22 @@ def _hops(adj, starts, goals):
     return None, []
 
 
+def _first_blockage(path, removed_roads, cut_pairs):
+    """Walk a baseline path and return (crossing_id, road_id) of the FIRST thing
+    that blocks it: a road dropped from the network, or a cut crossing edge
+    between two consecutive roads. road_id is None when the blockage is the
+    crossing edge itself (the approach roads are still drivable). (None, None)
+    if the path is clear."""
+    for i, r in enumerate(path):
+        if r in removed_roads:
+            return removed_roads[r], r
+        if i + 1 < len(path):
+            pair = tuple(sorted((r, path[i + 1])))
+            if pair in cut_pairs:
+                return cut_pairs[pair], None
+    return None, None
+
+
 def run(hazard_id: int) -> dict:
     """Propagate one active hazard. Idempotent: clears its derived rows first."""
     with db.conn() as c:
@@ -125,26 +141,34 @@ def run(hazard_id: int) -> dict:
             if rid == reach_id:
                 hit(oid, fp_state, [f"hazard:{kind}/{sev}", reach_id, oid])
 
-    # 2) severed roads (roads carrying blocked bridges). A road carrying a
-    #    blocked crossing is SEVERED (impact state). How that break is applied to
-    #    the network depends on how many roads the crossing joins (D-034):
-    #      >= 2 carriers -> cut the crossing edge between them, roads survive
-    #       1 carrier    -> the break is mid-road and cannot be localised; drop it
+    # 2) apply each blocked crossing to the road network (D-035).
+    #
+    #    In OSM a bridge is its own way; ingest lifts it out as a type=bridge
+    #    object, so the roads either side are ALREADY split at it. The impassable
+    #    thing is the crossing deck, not the approach roads - they stay perfectly
+    #    drivable, you simply cannot get across. So:
+    #      >= 2 carriers -> the crossing is a distinct way: CUT THE EDGE between
+    #                       the carriers. The approach roads take NO state; marking
+    #                       them SEVERED while still routing traffic over them
+    #                       would tell an officer "this road is cut, now drive it".
+    #       1 carrier    -> the crossing sits mid-way through one unsplit way and
+    #                       the break cannot be localised: that road IS SEVERED and
+    #                       is dropped whole. Over-states the break - the safe way.
     carriers_of = defaultdict(list)
     for road, bid in by_type.get("carries", []):
         carriers_of[bid].append(road)
 
-    severed, removed_roads, cut_pairs = {}, set(), set()
+    removed_roads = {}   # road -> the crossing that severed it (sole carrier)
+    cut_pairs = {}       # (roadA, roadB) sorted -> the crossing joining them
     for bid in sorted(blocked_bridges):
         roads = sorted(set(carriers_of.get(bid, [])))
-        for road in roads:
-            severed[road] = bid
-            hit(road, "SEVERED", [f"hazard:{kind}/{sev}", reach_id, bid, road])
         if len(roads) >= 2:
             for a, b in itertools.combinations(roads, 2):
-                cut_pairs.add(tuple(sorted((a, b))))
+                cut_pairs[tuple(sorted((a, b)))] = bid
         elif len(roads) == 1:
-            removed_roads.add(roads[0])
+            road = roads[0]
+            removed_roads[road] = bid
+            hit(road, "SEVERED", [f"hazard:{kind}/{sev}", reach_id, bid, road])
 
     # 3) settlement reachability to the facilities that serve them
     adj_before = _road_adj(by_type)
@@ -185,12 +209,16 @@ def run(hazard_id: int) -> dict:
                 continue                      # unaffected
 
             # invariant 2: name the crossing that actually blocks THIS
-            # settlement's route to THIS facility - the first severed road along
-            # its baseline path, and the bridge that severed that road.
-            blocking_road = next((r for r in pb if r in severed), None)
-            if blocking_road is None:
-                blocking_road = next((r for r in entries if r in severed), None)
-            blocking_bridge = severed.get(blocking_road) if blocking_road else None
+            # settlement's route to THIS facility - the first blockage met along
+            # its baseline path, whether that is a dropped road or a cut crossing.
+            blocking_bridge, blocking_road = _first_blockage(
+                pb, removed_roads, cut_pairs)
+            if blocking_bridge is None:
+                # the settlement's own access road may itself have been dropped
+                for r in entries:
+                    if r in removed_roads:
+                        blocking_bridge, blocking_road = removed_roads[r], r
+                        break
 
             chain = [f"hazard:{kind}/{sev}", reach_id]
             if blocking_bridge:

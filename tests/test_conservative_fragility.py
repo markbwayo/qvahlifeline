@@ -116,7 +116,10 @@ def test_unclassified_crossing_isolates_village_at_alert(fresh_db):
         _corridor(c, structure=None)          # synth crossing, unclassified
     impacts, _ = _run_flood("alert")
     assert impacts.get("X") == "LIKELY_IMPASSABLE"
-    assert impacts.get("rX") == "SEVERED"
+    # D-035: the crossing joins several roads, so the CROSSING is the impassable
+    # object and the crossing edge is cut. The approach roads stay drivable and
+    # therefore carry no state - only the village loses its clinic.
+    assert "rX" not in impacts
     assert impacts.get("S1") == "ISOLATED"    # the village is warned
 
 

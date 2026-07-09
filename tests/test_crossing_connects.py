@@ -189,10 +189,16 @@ def test_multi_carrier_crossing_cuts_the_edge_not_the_roads(fresh_db):
         L("H", "rN", "access_via")
         L("S", "V", "serves"); L("H", "V", "serves")
     links.infer_crossing_connects()
-    states, _ = _propagate()
-    assert states["rS"] == "SEVERED" and states["rN"] == "SEVERED"
+    states, chains = _propagate()
+    # D-035: the bridge deck is the impassable object; the approach roads either
+    # side stay drivable and take NO state. Marking them SEVERED while still
+    # routing traffic over them would tell an officer "this road is cut, drive it".
+    assert states["X"] == "LIKELY_IMPASSABLE"
+    assert "rS" not in states and "rN" not in states
     assert states["V"] == "ISOLATED"           # from the clinic across the river
     assert "S" not in states                   # school on own bank still reachable
+    assert "X" in chains["V"]                  # the why-chain names the crossing
+    assert "rS" not in chains["V"]             # and no phantom severed road
 
 
 def test_single_carrier_crossing_removes_the_road(fresh_db):
@@ -239,3 +245,37 @@ def test_settlement_on_a_cut_but_surviving_road_keeps_local_access(fresh_db):
     states, _ = _propagate()
     assert states["V"] == "ISOLATED"           # lost the clinic
     assert "W" not in states                   # kept the borehole on its own bank
+
+
+def test_alternate_route_never_traverses_a_severed_road(fresh_db):
+    r"""D-035 guard. A SEVERED road is dropped from the network, so it can never
+    appear in the alternate route we hand an officer. (The live demo printed
+    `alternate_via: ...>w169219432>...` where w169219432 was itself SEVERED.)
+
+        V --rS--+--[Xmid on rMid]--+--rN-- H        (rMid: sole carrier -> SEVERED)
+                \--rDetour---------/                 (longer, stays open)
+    """
+    with db.conn() as c:
+        A = lambda oid, t, p=None: db.add_object(c, oid, t, oid, 0.94, 34.28,
+                                                 p or {}, source="osm")
+        L = lambda a, b, t: db.add_link(c, a, b, t, "test")
+        A("R", "river_reach"); A("R2", "river_reach")
+        A("Xmid", "bridge", {"structure": "ford"})      # blocks at emergency
+        A("rS", "road_segment"); A("rMid", "road_segment"); A("rN", "road_segment")
+        A("rD1", "road_segment"); A("rD2", "road_segment")
+        A("V", "settlement"); A("H", "clinic")
+        L("Xmid", "R", "crosses")
+        L("rMid", "Xmid", "carries")                    # SOLE carrier -> road dropped
+        L("rS", "rMid", "connects"); L("rMid", "rN", "connects")
+        L("rS", "rD1", "connects"); L("rD1", "rD2", "connects"); L("rD2", "rN", "connects")
+        L("V", "rS", "access_via"); L("H", "rN", "access_via")
+        L("H", "V", "serves")
+    states, chains = _propagate()
+
+    assert states["rMid"] == "SEVERED"
+    assert states["V"] == "REROUTED"                     # detour exists
+    alt = [s for s in chains["V"] if str(s).startswith("alternate_via:")][0]
+    assert "rMid" not in alt                             # never route over a severed road
+    assert "rD1" in alt and "rD2" in alt                 # the real detour is named
+    # and the why-chain names what blocked the baseline route
+    assert "Xmid" in chains["V"] and "rMid" in chains["V"]
