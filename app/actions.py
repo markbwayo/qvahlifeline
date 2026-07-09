@@ -15,6 +15,7 @@ The failure direction that matters (see HANDOFF §3):
     RETURNS every uncovered impact; it never drops one quietly.
 """
 import csv
+import json
 import os
 import sys
 
@@ -193,16 +194,71 @@ def generate(hazard_id: int) -> dict:
     return fire_actions(hazard_id)
 
 
+# ------------------------------------------------------- consequence (read-side, derived)
+
+def _dependents(c, hazard_id):
+    """object_id -> how many ISOLATED settlements name it in their why-chain.
+
+    Derived, never stored: it is a fact about the impacts of THIS hazard, and it
+    must be re-derivable from them. Counting is over ISOLATED settlement impacts
+    only - the engine has already proved each of those chains (invariant 2), so
+    membership in one is proof that this object stands between that village and
+    a facility it lost. Nothing is inferred, nothing is modelled.
+    """
+    dep = {}
+    for r in c.execute("SELECT object_id, state, why_chain_json FROM impacts "
+                       "WHERE hazard_id=? AND state='ISOLATED'", (hazard_id,)):
+        for oid in set(json.loads(r["why_chain_json"])):
+            dep[oid] = dep.get(oid, 0) + 1
+    return dep
+
+
+def _carrier_counts(c):
+    """crossing id -> number of vehicle roads that `carries` it."""
+    return {r["dst"]: r["n"] for r in c.execute(
+        "SELECT dst, COUNT(*) n FROM links WHERE type='carries' GROUP BY dst")}
+
+
 def actions_for(hazard_id: int):
-    """Every action of one hazard, joined to its impact. Read-only, for the UI."""
+    """Every action of one hazard, joined to its impact. Read-only, for the UI.
+
+    Ordered by CONSEQUENCE first, lead time second (D-045). Sorting by lead time
+    alone puts three unnamed ford nodes at 12 h above the B112 bridge at 24 h -
+    six identical closure orders for crossings that isolate nobody, printed above
+    the deck that cuts fifty-one villages. Urgency is not consequence.
+
+    Two derived fields ride along, both computed from the graph and the engine's
+    own why-chains:
+      * `consequence` - ISOLATED settlements whose route this object blocks.
+      * `carriers`    - vehicle roads linked to this crossing (bridges only).
+      * `precautionary` - consequence == 0. The action still fires, and still
+        carries its full weight: a flooded ford is a hazard to whoever drives
+        into it. Zero dependents means only that no village in THIS graph loses
+        a route through it - either it truly carries no vehicle road, or our link
+        inference never found the road it sits on (7 bare OSM ford nodes have no
+        carrier within 100 m). A gap in our data may never silence a warning
+        (invariant 6), so the flag explains the action; it does not suppress it.
+    """
     with db.conn() as c:
-        return [dict(r) for r in c.execute(
+        rows = [dict(r) for r in c.execute(
             "SELECT a.id, a.impact_id, a.action_text, a.owner_role, a.lead_time_hrs, "
-            "a.status, i.object_id, i.state, i.why_chain_json "
+            "a.status, i.object_id, i.state, i.why_chain_json, "
+            "o.type AS object_type, o.name AS object_name "
             "FROM actions a JOIN impacts i ON i.id = a.impact_id "
-            "WHERE i.hazard_id=? "
-            "ORDER BY a.lead_time_hrs, i.object_id, a.owner_role, a.action_text",
-            (hazard_id,))]
+            "JOIN objects o ON o.id = i.object_id "
+            "WHERE i.hazard_id=?", (hazard_id,))]
+        dep = _dependents(c, hazard_id)
+        carr = _carrier_counts(c)
+
+    for a in rows:
+        a["consequence"] = dep.get(a["object_id"], 0)
+        a["carriers"] = (carr.get(a["object_id"], 0)
+                         if a["object_type"] == "bridge" else None)
+        a["precautionary"] = (a["consequence"] == 0)
+
+    rows.sort(key=lambda a: (-a["consequence"], a["lead_time_hrs"],
+                             a["object_id"], a["owner_role"], a["action_text"]))
+    return rows
 
 
 # --------------------------------------------------------------------------- cli
@@ -227,6 +283,15 @@ def _main(argv):
                 print("   ", u["object_type"], u["state"], u["object_id"])
         else:
             print("every impact has at least one action")
+        rows = actions_for(int(argv[1]))
+        prec = sum(1 for a in rows if a["precautionary"])
+        print(f"{prec} of {len(rows)} actions are precautionary "
+              f"(consequence 0: no village in this graph loses a route through them)")
+        print("--- by consequence, then lead time:")
+        for a in rows[:8]:
+            label = a["object_name"] or a["object_id"]
+            print(f"  {a['consequence']:>3} dep  {a['lead_time_hrs']:>3}h  "
+                  f"{label[:28]:<28} {a['state']:<18} {a['owner_role']}")
         return 0
     print("usage: python -m app.actions <hazard_id> | --validate", file=sys.stderr)
     return 2

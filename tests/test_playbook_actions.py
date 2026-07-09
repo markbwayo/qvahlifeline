@@ -349,6 +349,104 @@ def test_generate_alias_still_serves_main_py(fresh_db):
     assert len(actions.actions_for(hz)) == res["actions"]
 
 
+# ------------------------------------------- D-045: consequence, carriers, precaution
+
+def add_orphan_ford():
+    """A crossing on the river with NO carrier road at all - the 7 bare OSM ford
+    nodes of limitation #3, in miniature."""
+    with db.conn() as c:
+        db.add_object(c, "F1", "bridge", None, 1.0300, 34.2200,
+                      {"structure": "ford"}, source="osm")
+        db.add_link(c, "F1", "R1", "crosses", "geom_crosses")
+
+
+def test_a_crossing_with_no_carrier_still_fires_its_closure_action(fresh_db):
+    """D-045. It isolates nobody - our graph knows no road on it. It is still a
+    flooded ford, and closing it is still the district engineer's job. A gap in
+    our link inference may never silence a warning (invariant 6).
+
+    This test exists because the behaviour is currently an accident of matching
+    on state alone. Delete the ford's action as 'noise' and this test goes red.
+    """
+    add_orphan_ford()
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    actions.fire_actions(hz, REAL_PLAYBOOK)
+
+    f1 = [a for a in actions.actions_for(hz) if a["object_id"] == "F1"]
+    assert len(f1) == 2                         # both bridge/IMPASSABLE rows fired
+    assert all(a["state"] == "IMPASSABLE" for a in f1)
+    assert any("Close the crossing" in a["action_text"] for a in f1)
+    assert all(a["carriers"] == 0 for a in f1)
+    assert all(a["consequence"] == 0 for a in f1)
+    assert all(a["precautionary"] is True for a in f1)
+    # and it severed nothing, exactly as it should not have
+    with db.conn() as c:
+        severed = [r["object_id"] for r in c.execute(
+            "SELECT object_id FROM impacts WHERE hazard_id=? AND state='SEVERED'", (hz,))]
+    assert "F1" not in severed
+
+
+def test_precautionary_never_means_suppressed(fresh_db):
+    """The flag explains an action. It must never remove one."""
+    add_orphan_ford()
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    res = actions.fire_actions(hz, REAL_PLAYBOOK)
+    rows = actions.actions_for(hz)
+    assert len(rows) == res["actions"]          # nothing dropped on the read side
+    assert any(a["precautionary"] for a in rows)
+    assert res["uncovered"] == []
+
+
+def test_actions_are_ordered_by_consequence_then_lead_time(fresh_db):
+    """Sorting by lead time alone puts a 12h ford closure above the 24h bridge
+    that cuts fifty-one villages. Urgency is not consequence."""
+    add_orphan_ford()
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    actions.fire_actions(hz, REAL_PLAYBOOK)
+    rows = actions.actions_for(hz)
+
+    keys = [(-a["consequence"], a["lead_time_hrs"]) for a in rows]
+    assert keys == sorted(keys), "action list is not consequence-ordered"
+
+    # F1 (12h, isolates nobody) must NOT outrank C1 (24h... in fact 12h, but it
+    # blocks both villages). The consequence-0 rows are last.
+    assert rows[0]["consequence"] > 0
+    assert rows[-1]["consequence"] == 0
+    f1_pos = min(i for i, a in enumerate(rows) if a["object_id"] == "F1")
+    c1_pos = min(i for i, a in enumerate(rows) if a["object_id"] == "C1")
+    assert c1_pos < f1_pos
+
+
+def test_consequence_counts_only_proved_isolation(fresh_db):
+    """Consequence is read off the engine's own why-chains, not re-inferred."""
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    actions.fire_actions(hz, REAL_PLAYBOOK)
+    by_obj = {}
+    for a in actions.actions_for(hz):
+        by_obj[a["object_id"]] = a["consequence"]
+
+    assert by_obj["C1"] == 2          # the culvert blocks V1 and V2
+    assert by_obj["B1"] == 0          # the bridge is blocked but isolates nobody
+    assert by_obj["H1"] == 2          # the clinic is lost to both villages
+    assert by_obj["V1"] == 1 and by_obj["V2"] == 1
+    assert by_obj["B1"] == 0 and by_obj["C1"] > by_obj["B1"]
+
+
+def test_carriers_field_is_none_for_non_crossings(fresh_db):
+    hz = make_hazard("emergency")
+    propagate.run(hz)
+    actions.fire_actions(hz, REAL_PLAYBOOK)
+    for a in actions.actions_for(hz):
+        if a["object_type"] == "bridge":
+            assert isinstance(a["carriers"], int)
+        else:
+            assert a["carriers"] is None
+
+
 def test_hazard_kinds_registry_is_the_only_source_of_truth():
     assert "riverine_flood" in HAZARD_KINDS
     for rows in actions.load_playbook(REAL_PLAYBOOK).values():
