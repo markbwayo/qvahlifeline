@@ -26,22 +26,38 @@
   affected region who has built the exact culverts the model watches.
 
 ## The demo storyline (rehearse until boring)
-1. **The map:** "This is <pilot district> — every bridge, culvert, clinic, water
-   point and village, and the dependencies between them. This one bridge is the only
-   clinic route for 11,000 people. As a civil engineer, I've built these crossings —
-   this graph is engineering knowledge, digitised."
-2. **The hazard:** "This morning's free GloFAS forecast puts the river above its
-   5-year flow in 3 days. Watch." *(click)*
-3. **The propagation:** bridge turns red → villages flag ISOLATED → why-chain opens:
-   flood → bridge → road → village → clinic. "No AI decided this — physics and
-   dependencies did. That's why an officer can trust it."
-4. **The actions:** playbook fires: notify chiefs (messages drafted in Lumasaba/
-   Swahili by AI, approved by a human), pre-position clinic stock across the bridge,
-   open the alternate route. Owners and lead times on screen.
-5. **The close:** "Forecasts already exist. LIFELINE is the missing layer between
-   the forecast and the field — and every action it proposes was pre-agreed by the
-   district committee, which is exactly the structure anticipatory-action funders
-   pay for."
+1. **The map:** "This is Manafwa district, at Bubulo — 362 real objects: every bridge,
+   ford, clinic, school, water point and village, and the dependencies between them.
+   As a civil engineer from this region, I have built crossings like these. This graph
+   is engineering knowledge, digitised."
+2. **The hazard:** "GloFAS puts the Manafwa above its high return-period flow. Watch."
+   *(click)*
+3. **The propagation:** Manafwa Bridge — the B112, the town's only tarmac crossing —
+   turns red. Sixty-two villages flag ISOLATED. Why-chain opens:
+   flood → Manafwa reach → Manafwa Bridge → Bumayeku B → Namuembi Medical Centre.
+   "No AI decided this. Physics and dependencies did. That's why an officer can trust it."
+4. **The second bridge (the beat that wins it):** "There is another bridge twenty metres
+   away — Old Manafwa bridge. Ask the engine to route over it." It won't. Same river
+   reach, same flood, impassable at the same hour. It appears in **zero** of the 62
+   why-chains. Nobody told the engine that. Reachability found it.
+5. **The actions:** the playbook fires per impact: alert the chiefs by radio and
+   WhatsApp (drafted in Lumasaba/Swahili at the AI edge, marked DRAFT, human-approved);
+   pre-position the clinic drug kit on the south bank **before** the water arrives;
+   stage closure signage. Owners and lead times on screen. **No alternate route is
+   offered, because there is none — the engine says so rather than inventing one.**
+6. **The close:** "Forecasts already exist. LIFELINE is the missing layer between the
+   forecast and the field — and every action it proposes was pre-agreed by the district
+   committee, which is exactly the structure anticipatory-action funders pay for."
+
+## The three lines to say before a judge asks
+- **Severity:** "This is `emergency` — a high return-period event, not a routine season.
+  Both town bridges are engineered; at `alert` the table scores them AT_RISK and nothing
+  is severed. We do not cry wolf."
+- **Assumptions:** "Eighteen crossings are unclassified, and we score them as the *most*
+  fragile structure, never the least. Reclassify every one of them as an engineered
+  bridge and the 62 does not move. It is topology, not assumption."
+- **Scale:** "Sixty-two named settlements. We do not have population per village and we
+  will not estimate one on this stage."
 
 ## Submission checklist (Phase 4, 26–30 Jul)
 - [ ] Working deployment on VPS (port 8017) + `USE_LIVE=0` fallback tested
@@ -49,8 +65,10 @@
 - [ ] Write-up per ICPAC's required format (check page/word limits on the portal)
 - [ ] Architecture diagram (schematic in this bundle, refreshed)
 - [ ] Repo README presentable; ODbL/CC-BY/data attributions visible in UI footer
-- [ ] Honest-limits paragraph (OSM completeness, GloFAS resolution, heuristic
-      fragility v1) — pre-empting the tough question beats dodging it
+- [ ] Honest-limits paragraph: OSM completeness; GloFAS ~5 km grid is screening-grade
+      at village scale; fragility rules are engineering heuristics v1; single-carrier
+      crossings over-state the break (road ways not yet split at crossings); 7 bare ford
+      nodes have no carrier road; demo severity is `emergency`, not a routine season
 - [ ] Submit **30 July**, confirm receipt
 
 ## Week-by-week (from 4 Jul)

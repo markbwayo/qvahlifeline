@@ -3,6 +3,25 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 16 — Step B closed: the demo numbers are real
+- What changed: no code. Ran `demo_flood_river("emergency")` on the real graph and read
+  the result for the first time. 09 → v0.9; D-038..D-042 logged; 08 storyline filled.
+- The numbers: 77 impacts, 31 reaches flooded, **62 settlements ISOLATED — all 62 from a
+  clinic**, 3 from a school; 2 clinics + 2 schools SERVICE_AT_RISK; 10 crossings blocked
+  (5 IMPASSABLE, 5 LIKELY_IMPASSABLE); 1 road SEVERED. 0 REROUTED.
+- Blockers: w128611448 (spine) cuts 51; w747829218 cuts 8; w160219946 cuts 3. All three
+  are structure=bridge. No synthesised/unclassified crossing blocks anybody.
+- Sensitivity (on a /tmp copy): reclassifying all 18 synth crossings ford→bridge changes
+  nothing (62/3). The D-027 ford assumption is not load-bearing for the demo (D-039).
+- Old Manafwa bridge co-fails but appears in 0/62 chains — it was never an alternate (D-038).
+- Found: spine object has name=None (OSM `noname=yes`; name sits on `bridge:name`). Fix is
+  an injection rule in links.py, spec'd into 09 v0.9 first (D-041).
+- Found: 08 step 4 promised "open the alternate route" — there is none. Corrected.
+- Tested + result: 105 passing (`pytest tests/ -q`).
+- Days to deadline: 21 (internal 30 Jul).
+- NEXT STEP: code commit — links.py operator-name fallback + its test. Then Phase 2 item 1:
+  actions.py + data/playbook.csv with its invariant-4 test.
+
 ## Session 15 — Hazard scope (D-036); self-healing schema (D-037); STEP B ACTUALLY COMPLETE
 - What changed: propagate.py gains flooded_reaches() and hazards.gains scope
   (reach|river) + demo_flood_river(); hazards table migrated via a new scope column.

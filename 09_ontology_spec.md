@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v0.8 (THE core artifact)
+# 09 — Ontology Specification v0.9 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -9,7 +9,7 @@ reverse. Version every change.
 | Type | Key properties | Notes / OSM mapping |
 |---|---|---|
 | `river_reach` | name, waterway (river/stream), geometry, glofas_lat/lon | waterway=river/stream; `waterway` decides hazard scope (see below) |
-| `bridge` | name, structure (bridge/culvert/ford/causeway), crossing_class (main_road/minor_road/footpath), needs_review, single_point_of_failure | bridge=yes, tunnel=culvert, ford=yes; crossing_class gates vehicle reachability |
+| `bridge` | name, name_source (osm/operator/object_id), structure (bridge/culvert/ford/causeway), crossing_class (main_road/minor_road/footpath), needs_review, single_point_of_failure | bridge=yes, tunnel=culvert, ford=yes; crossing_class gates vehicle reachability |
 | `road_segment` | name, class, geometry, all_weather (bool) | highway=* between junctions/assets |
 | `settlement` | name, population (WorldPop) | place=village/hamlet/town |
 | `clinic` | name, level | amenity=clinic/hospital/health_post |
@@ -22,9 +22,29 @@ reverse. Version every change.
 - A crossing's `source` is one of `seed | osm | operator | synth`. Operator crossings
   are satellite-verified engineer classifications from `data/operator_crossings.csv`.
 - On a match the operator's `structure`/`crossing_class` win, but the OSM object's
-  id, name and coordinates are preserved (map/demo/link stability). `source` becomes
+  id and coordinates are preserved (map/demo/link stability). `source` becomes
   `operator`; provenance kept in props (`osm_id`, `osm_structure`, `dedup_dist_m`,
   `operator_id`). No second object is created.
+
+### Naming a reconciled crossing (v0.9)
+- The OSM `name` is preserved **only when it is non-empty** — the district knows the
+  structure by that label and the operator must never silently rewrite it. When the
+  OSM name is empty, the operator's CSV `name` becomes the object's name.
+- `props.name_source` ∈ `osm | operator | object_id` records which, is written once,
+  and is never flipped by a re-run (invariant 1). `props.osm_name` keeps the original
+  (often `null`).
+- **Why the hole exists.** OSM does not always put a structure's name on `name`. The
+  demo spine `w128611448` carries `noname=yes` with `bridge:name=Manafwa Bridge` and
+  `bridge:ref=B112`, so ingest reads `tags.name` and stores NULL. Preserving that NULL
+  rendered the district's only tarmac crossing — the object 51 of 62 ISOLATED
+  why-chains name — as the bare string `w128611448` on the map and in the why-chain
+  panel, while the least load-bearing structure (Old Manafwa bridge, present in zero
+  isolated chains) was the only named bridge on screen. See D-041.
+- `bridge:name` is captured as `props.osm_bridge_name` for provenance and audit. It is
+  **never** promoted to the object's name: an operator classification is ground truth,
+  a secondary OSM tag is not. Fixing the general nameless-crossing case at ingest
+  (e.g. `w747829218`, unnamed, cuts off 8 settlements) is post-hackathon.
+- A crossing with no OSM name and no operator row keeps its object id as its label.
 - **Identity is never guessed.** Resolution order per operator row: (1) already
   injected (by `operator_id`) -> update in place; (2) explicit `match_hint` (an OSM id)
   -> that object; (3) no hint and exactly one OSM crossing within ~50 m -> that one;
