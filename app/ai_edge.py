@@ -1,9 +1,9 @@
 """The AI edge. One function. The only place a model touches LIFELINE.
 
-`ai_edge(task, payload) -> dict`. It translates words that the deterministic core
-has already decided. It never sees an impact id, never reads the graph, never
-writes to `objects`, `impacts`, `actions` or `messages.csv`, and its output is
-never authority. Swap the provider by editing `_call()` and nothing else (07).
+`ai_edge(task, payload) -> dict`. It translates words the deterministic core has
+already decided. It never sees an impact id, never reads the graph, never writes
+to any engine table, and its output is never authority. Swap the provider by
+editing `_call()` and nothing else (07).
 
 What it may translate INTO
 --------------------------
@@ -14,33 +14,68 @@ room who could audit the result. A fluent-looking mistranslation of "do not cros
 is an impact decision taken by a model in the one channel nobody can check
 (hard rule 1, D-052). Lumasaba lives in `data/messages.csv`, written by a human.
 
-The asymmetry with `hazards.py`, which is deliberate
-----------------------------------------------------
-`hazards.scan_live()` RAISES on every feed failure: a dead river gauge that returns
-"no hazard" is indistinguishable from a calm river, and that kills people.
+What it may be TOLD (D-059)
+---------------------------
+`text`, `target_lang`, `preserve`, and nothing else. An unknown payload key raises.
+The check exists so that a later "pass the impact id through, so we can log it"
+cannot quietly put a graph identifier into a prompt: hard rule 1 is enforced by the
+signature, not by a promise. This module imports `db` for its draft cache and
+nothing else from this package, and a test parses this file to prove it.
 
-`ai_edge()` NEVER raises on a failure: a dead translator returns `edge unavailable`
-and the English and Lumasaba text renders exactly as before, because neither passes
-through a model. Losing the forecast is losing the warning. Losing the translator is
-losing a convenience.
+Two switches, because there are two different guarantees (D-058)
+----------------------------------------------------------------
+`USE_LIVE` gates the deterministic core - the river feed, the scan, the trigger. It
+exists because a dead gauge that returns "no hazard" is indistinguishable from a
+calm river, and that kills people. `scan_live()` therefore RAISES on every feed
+failure.
+
+`AI_EDGE_LIVE` (default `0`) gates this module, and only this module. A dead edge
+returns `edge unavailable`; the English and the Lumasaba text render exactly as
+before, because neither ever passes through a model. Losing the forecast is losing
+the warning. Losing the translator is losing a convenience. The edge is safe by
+construction - which is the property `USE_LIVE` was invented to guarantee by fiat -
+so it does not need that switch, and it does need its own. Demo day runs
+`USE_LIVE=0, AI_EDGE_LIVE=1`: the flood comes from the graph, the Swahili from the
+model.
 
 A refusal is not a failure. Asking for Lumasaba raises; the network being down does
 not.
 
+Retrying once, and only where a retry means something (D-057)
+--------------------------------------------------------------
+429 and 503 mean the request was well formed and the server declined to answer NOW.
+The free tier is about ten requests a minute against seventy-two broadcasts, so a
+429 is a matter of when, and a live 503 was observed on `gemini-2.5-flash` during
+Session 22. One two-second pause, one more attempt.
+
+400, 401, 403 and 404 mean the request will never succeed. Retrying burns quota,
+doubles the latency of a certain failure, and delays the only diagnostic that
+matters: a rotated key that never reached `.env` arrives as a 403, and the presenter
+must see it in one second, not twenty-two. A timeout is not retried either - a 429
+is a prompt response, a hang is not, and a hang offers no evidence that a second
+attempt would return. The worst case is therefore `2 x TIMEOUT_S + RETRY_PAUSE_S`
+= 42 s, reached only if a slow server answers 429 twice; the realistic bound is one
+round trip plus two seconds.
+
 What comes back
 ---------------
-Always `status`, always `approved: False`. A successful call returns
-`status: "DRAFT"`, and the draft is a proposal for a human, never a message. The
-sanity checks below cannot verify a translation - only a Swahili speaker can - so
-they check the things a non-speaker CAN check: that the text is not empty, not an
+Always `status`, always `approved: False`, always `retried`. A successful call
+returns `status: "DRAFT"`, and the draft is a proposal for a human, never a message.
+The sanity checks below cannot verify a translation - only a Swahili speaker can -
+so they check the things a non-speaker CAN check: that the text is not empty, not an
 essay, not markdown, carries no URL, and that every proper name we asked to be
 preserved actually survived. A name that vanished in translation is surfaced to the
 approver, who is the only safeguard that matters.
+
+`status: "edge unusable"` still carries the rejected `draft`, so an operator can see
+what came back and judge whether the check was too strict. A caller must render it
+as REJECTED. Only `status == "DRAFT"` is a draft.
 """
 import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -59,6 +94,23 @@ TIMEOUT_S = 20
 TARGET_LANGS = {"sw": "Swahili"}
 TASKS = {"translate"}
 
+# D-059. Everything the edge is allowed to be told. Not a subset it reads and a
+# remainder it ignores - a closed set, and an unknown key is a refusal.
+PAYLOAD_KEYS = frozenset({"text", "target_lang", "preserve"})
+
+# D-057. `come back` versus `you are wrong`. Retry the first, never the second.
+RETRY_STATUS = frozenset({429, 503})
+RETRY_PAUSE_S = 2.0
+MAX_ATTEMPTS = 2                       # one attempt, one retry. Never a loop.
+
+# D-058. This module's own gate. `USE_LIVE` guards the deterministic core and is
+# not read here: the two switches guard different failures.
+EDGE_LIVE_VAR = "AI_EDGE_LIVE"
+
+DISABLED = f"edge disabled ({EDGE_LIVE_VAR}=0)"
+UNAVAILABLE = "edge unavailable"
+UNUSABLE = "edge unusable"
+
 # A translation of a flood warning is not a creative task.
 SYSTEM = (
     "You translate official flood warnings for a district disaster committee in "
@@ -76,8 +128,8 @@ class AIEdgeRefused(Exception):
     """The edge was asked to do something it must never do. Not a failure."""
 
 
-def _use_live():
-    return os.environ.get("USE_LIVE", "0") == "1"
+def _edge_live():
+    return os.environ.get(EDGE_LIVE_VAR, "0") == "1"
 
 
 def _api_key():
@@ -88,9 +140,15 @@ def _model():
     return os.environ.get("GEMINI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
+def _pause():
+    time.sleep(RETRY_PAUSE_S)
+
+
 def _cache_key(text, lang, model):
-    h = hashlib.sha256(f"{model}|{lang}|{text}".encode("utf-8")).hexdigest()[:20]
-    return f"aiedge:{h}"
+    """The instruction is part of the input (D-059). Tune SYSTEM after a rehearsal
+    and every cached draft was produced under wording nobody recorded."""
+    raw = f"{model}|{lang}|{SYSTEM}|{text}"
+    return "aiedge:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 
 def _cache_get(key):
@@ -122,6 +180,16 @@ def _call(prompt, model, key):
     return "".join(p.get("text", "") for p in parts).strip()
 
 
+def _http_reason(err, model):
+    """Name the model that failed. A 404 on a retired model string must say WHICH
+    string, or the fix is a guessing game at 2am."""
+    try:
+        detail = err.read().decode("utf-8", "replace")[:200]
+    except Exception:                            # noqa: BLE001 - a body is a courtesy
+        detail = ""
+    return f"HTTP {err.code} from {model}: {detail}"
+
+
 def _sanity(source, draft, preserve):
     """What a non-speaker can check. Not a verification of meaning - there is none,
     which is exactly why the human approves."""
@@ -145,6 +213,13 @@ def ai_edge(task, payload):
     if task not in TASKS:
         raise AIEdgeRefused(f"unknown task {task!r}; the edge does {sorted(TASKS)}")
 
+    unknown = sorted(set(payload) - PAYLOAD_KEYS)
+    if unknown:
+        raise AIEdgeRefused(
+            f"payload key(s) {unknown} are not permitted; the edge is told "
+            f"{sorted(PAYLOAD_KEYS)} and nothing else. It must never be handed a "
+            f"graph identifier (D-059, hard rule 1).")
+
     text = (payload.get("text") or "").strip()
     lang = (payload.get("target_lang") or "").strip()
     preserve = payload.get("preserve") or []
@@ -161,37 +236,51 @@ def ai_edge(task, payload):
             f"target_lang must be one of {sorted(TARGET_LANGS)}, got {lang!r}")
 
     base = {"task": task, "target_lang": lang, "source_text": text,
-            "draft": None, "approved": False, "warnings": []}
+            "draft": None, "approved": False, "warnings": [], "retried": False}
 
-    if not _use_live():
-        return dict(base, status="edge disabled (USE_LIVE=0)")
+    if not _edge_live():
+        return dict(base, status=DISABLED)
     key = _api_key()
     if not key:
-        return dict(base, status="edge unavailable", reason="no GEMINI_API_KEY")
+        return dict(base, status=UNAVAILABLE, reason="no GEMINI_API_KEY")
 
     model = _model()
     ck = _cache_key(text, lang, model)
     hit = _cache_get(ck)
     if hit:
-        return dict(hit, cached=True)
+        return dict(hit, cached=True, approved=False)
 
     prompt = f"Translate into {TARGET_LANGS[lang]}:\n\n{text}"
-    try:
-        draft = _call(prompt, model, key)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:200] if hasattr(e, "read") else ""
-        return dict(base, status="edge unavailable",
-                    reason=f"HTTP {e.code} from {model}: {detail}")
-    except Exception as e:                       # noqa: BLE001 - a dead edge is not fatal
-        return dict(base, status="edge unavailable",
-                    reason=f"{type(e).__name__}: {e}")
+    attempt, retried = 0, False
+    while True:
+        attempt += 1
+        try:
+            draft = _call(prompt, model, key)
+            break
+        except urllib.error.HTTPError as e:
+            # D-057. A 429 or a 503 is the server saying `try again`. A 400 or a
+            # 403 is the server saying `you are wrong`, and retrying a wrong
+            # request is a way of not reading the error.
+            if e.code in RETRY_STATUS and attempt < MAX_ATTEMPTS:
+                retried = True
+                _pause()
+                continue
+            return dict(base, status=UNAVAILABLE, reason=_http_reason(e, model),
+                        retried=retried)
+        except Exception as e:                   # noqa: BLE001 - a dead edge is not fatal
+            # A hang, a DNS failure, a refused connection. Not retried: there is no
+            # evidence a second attempt would return, and 42 s of a two-minute demo
+            # is a worse outcome than a rendered English warning with no Swahili.
+            return dict(base, status=UNAVAILABLE, reason=f"{type(e).__name__}: {e}",
+                        retried=retried)
 
     problems, warnings = _sanity(text, draft, preserve)
     if problems:
-        return dict(base, status="edge unusable", reason="; ".join(problems),
-                    draft=draft)
+        return dict(base, status=UNUSABLE, reason="; ".join(problems),
+                    draft=draft, retried=retried)
 
     out = dict(base, status="DRAFT", draft=draft, model=model, warnings=warnings,
+               retried=retried,
                note="DRAFT - a human must approve this before it is broadcast")
     _cache_put(ck, out)
     return dict(out, cached=False)
@@ -218,13 +307,13 @@ def _cli(argv):
         r = ai_edge("translate", {"text": "Do not try to cross.",
                                   "target_lang": "sw", "preserve": []})
         print(json.dumps(r, indent=1, ensure_ascii=False))
-        return 0 if r["status"] in ("DRAFT", "edge disabled (USE_LIVE=0)") else 1
+        return 0 if r["status"] in ("DRAFT", DISABLED) else 1
 
     from . import messages
     hid = int(argv[0])
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 3
     res = messages.messages_for(hid, "en")
-    print(f"live={_use_live()} key={'set' if _api_key() else 'MISSING'} "
+    print(f"{EDGE_LIVE_VAR}={_edge_live()} key={'set' if _api_key() else 'MISSING'} "
           f"model={_model()}")
     for m in res["messages"][:limit]:
         f, _ = messages.facts_for(m["impact_id"])
@@ -233,9 +322,10 @@ def _cli(argv):
             "preserve": [f.get(k) for k in ("settlement", "facility", "crossing")
                          if f.get(k)]})
         print(f"\n[{m['object_id']}] {d['status']}"
+              + ("  (retried)" if d.get("retried") else "")
               + (f"  ({d.get('reason')})" if d.get("reason") else ""))
         print(f"  EN : {m['text']}")
-        print(f"  SW : {d['draft'] or '-'}")
+        print(f"  SW : {d['draft'] if d['status'] == 'DRAFT' else '-'}")
         for w in d.get("warnings", []):
             print(f"  !! {w}")
     return 0
