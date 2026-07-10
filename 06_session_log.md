@@ -25,7 +25,18 @@ Newest entry at the top. Start each session by reading this. **Submission: 31 Ju
 - Tested + result: tests/test_ai_edge.py 25 new + 4 needs_name + prior = 280 passed.
   FIFTEEN negative controls, all red, incl. lum allowed / dead net raising / pre-approved
   draft / key in URL / temperature 0.9 / edge touching the impacts table.
-- Live: <fill: python -m app.ai_edge --selftest, then <hid> --limit 3 with USE_LIVE=1>
+- Live, real graph, hazard 16: 72 messages, 0 errors. needs_name = w747829218 (9
+  broadcasts), w160219946 (4), plus 5 crossings with only their own closure notice
+  (n8381841167/69/78, n8392107739, w903577974). Two names fix all 11 village
+  broadcasts that currently read a bare way id.
+- ai_edge live: "Do not try to cross." -> "Usijaribu kuvuka." The imperative survived —
+  the one failure mode this layer exists to catch. Free-tier 503 observed on
+  gemini-2.5-flash; the module named the model, named the code, and returned rather
+  than raising. Key format is AQ.+~50 chars, not AIza. A key was leaked in a screenshot
+  and has been ROTATED; secrets go in via `read -rs`, never a command line.
+- DECIDED for Session 23: D-057 (retry once on 429/503 only, never on 400/403) and
+  D-058 (AI_EDGE_LIVE gates the edge independently of USE_LIVE — the core keeps its
+  dead-feed guarantee; the edge is safe by construction).
 - Days to deadline: 20 (internal 30 Jul).
 - NEXT STEP: Phase 2 item 4c — the message panel in main.py: broadcasts grouped by
   audience, `missing` and `needs_name` visible, the Swahili DRAFT badge, an approve
