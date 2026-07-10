@@ -1,0 +1,4 @@
+object_type,state,hazard_kind,lang,template
+settlement,ISOLATED,riverine_flood,en,"Flood warning for {settlement}. The road to {facility} crosses {crossing}, and this flood is expected to close it. It is the only road. Anyone who needs medical care should move now, before the water rises. Do not try to cross."
+bridge,IMPASSABLE,riverine_flood,en,"{crossing} is expected to go under water in this flood and will not be passable. Do not drive, ride or walk across. Wait until the district engineer reopens it."
+bridge,LIKELY_IMPASSABLE,riverine_flood,en,"{crossing} may become impassable in this flood. Cross only if you must, and never once water is over the deck."

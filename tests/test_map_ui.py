@@ -268,8 +268,11 @@ def test_run_demo_clears_the_previous_hazard(graph):
 # ------------------------------------------------------------------- the page itself
 
 def test_page_shows_both_versions_and_the_required_attribution(fired):
+    from app.ontology import ONTOLOGY_VERSION
     html = main.home()
-    assert "ontology v0.3" in html
+    # never assert a version LITERAL: bumping the ontology would redden a UI test
+    # that has nothing to do with the change (ontology went v0.3 -> v0.4 here).
+    assert ONTOLOGY_VERSION.split(" (")[0] in html
     assert actions.PLAYBOOK_VERSION.split(" (")[0] in html
     assert "OpenStreetMap contributors (ODbL)" in html
     assert "GloFAS via the" in html
