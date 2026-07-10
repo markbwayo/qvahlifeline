@@ -499,3 +499,126 @@ def test_the_request_we_actually_send_is_deterministic_and_authenticated(env, mo
     assert "gemini-test:generateContent" in seen["url"]
     # the key rides in a header, never in the URL, so it cannot land in a log
     assert "AQ.test-key" not in seen["url"]
+
+
+# ------------------------------------- D-060: serving a draft is not making one
+
+def _warm(monkeypatch):
+    """Put one real draft in the cache the way a rehearsal would."""
+    _stub(monkeypatch, SW)
+    r = ai_edge.ai_edge("translate", {"text": EN, "target_lang": "sw"})
+    assert r["status"] == "DRAFT" and r["cached"] is False
+
+
+def test_a_cached_draft_is_served_when_the_key_is_gone(env, monkeypatch):
+    """A key is needed to MAKE a draft, never to SERVE one - the cache key does not
+    contain it. If .env fails to load on demo morning, the rehearsed Swahili still
+    renders, flagged `cached`."""
+    _warm(monkeypatch)
+    env.delenv("GEMINI_API_KEY")
+    r = ai_edge.ai_edge("translate", {"text": EN, "target_lang": "sw"})
+    assert r["status"] == "DRAFT" and r["cached"] is True and r["draft"] == SW
+
+
+def test_a_garbage_key_and_an_empty_key_now_behave_alike(env, monkeypatch):
+    """The incoherence D-060 closes: before it, an empty key blocked a cached draft
+    while a nonsense key sailed straight past it."""
+    _warm(monkeypatch)
+    env.setenv("GEMINI_API_KEY", "nonsense")
+    a = ai_edge.ai_edge("translate", {"text": EN, "target_lang": "sw"})
+    env.delenv("GEMINI_API_KEY")
+    b = ai_edge.ai_edge("translate", {"text": EN, "target_lang": "sw"})
+    assert a["status"] == b["status"] == "DRAFT"
+    assert a["cached"] is True and b["cached"] is True
+
+
+def test_a_missing_key_still_reports_itself_on_a_cache_miss(env, monkeypatch):
+    _warm(monkeypatch)
+    env.delenv("GEMINI_API_KEY")
+    r = ai_edge.ai_edge("translate", {"text": "A sentence never translated.",
+                                      "target_lang": "sw"})
+    assert r["status"] == "edge unavailable" and r["reason"] == "no GEMINI_API_KEY"
+
+
+def test_the_gate_stands_in_front_of_the_cache(env, monkeypatch):
+    """`AI_EDGE_LIVE=0` means do not use the edge. A cache is part of the edge."""
+    _warm(monkeypatch)
+    env.setenv("AI_EDGE_LIVE", "0")
+    r = ai_edge.ai_edge("translate", {"text": EN, "target_lang": "sw"})
+    assert r["status"] == "edge disabled (AI_EDGE_LIVE=0)" and r["draft"] is None
+
+
+# ------------------------------------------- cached_draft: the read-only door
+
+def test_cached_draft_never_touches_the_provider(env, monkeypatch):
+    """The only function a page render may call. 62 villages x one round trip is
+    not a page load, and the free tier is ten requests a minute."""
+    _warm(monkeypatch)
+
+    def explode(*a, **k):
+        raise AssertionError("cached_draft called the provider")
+    monkeypatch.setattr(ai_edge, "_call", explode)
+    d = ai_edge.cached_draft(EN)
+    assert d["draft"] == SW and d["cached"] is True
+
+
+def test_cached_draft_returns_none_on_a_miss(env, monkeypatch):
+    monkeypatch.setattr(ai_edge, "_call", lambda *a: pytest.fail("provider called"))
+    assert ai_edge.cached_draft("Never seen before.") is None
+    assert ai_edge.cached_draft("") is None
+
+
+def test_cached_draft_is_ungated(env, monkeypatch):
+    """AI_EDGE_LIVE governs whether we may speak to a model. Reading a draft we
+    already hold speaks to nobody."""
+    _warm(monkeypatch)
+    env.setenv("AI_EDGE_LIVE", "0")
+    assert ai_edge.cached_draft(EN)["draft"] == SW
+
+
+def test_cached_draft_never_returns_an_approval(env, monkeypatch):
+    _warm(monkeypatch)
+    ck = ai_edge._cache_key(EN, "sw", "gemini-test")
+    ai_edge._cache_put(ck, dict(ai_edge._cache_get(ck), approved=True))
+    assert ai_edge.cached_draft(EN)["approved"] is False
+
+
+def test_cached_draft_never_writes(env, monkeypatch):
+    _warm(monkeypatch)
+    with db.conn() as c:
+        before = c.execute("SELECT COUNT(*) FROM geocache").fetchone()[0]
+    ai_edge.cached_draft("Never seen before.")
+    ai_edge.cached_draft(EN)
+    with db.conn() as c:
+        after = c.execute("SELECT COUNT(*) FROM geocache").fetchone()[0]
+    assert before == after
+
+
+def test_cached_draft_refuses_lumasaba(env):
+    with pytest.raises(ai_edge.AIEdgeRefused, match="never generate Lumasaba"):
+        ai_edge.cached_draft(EN, "lum")
+
+
+def test_cached_draft_refuses_an_unlisted_language(env):
+    with pytest.raises(ai_edge.AIEdgeRefused, match="target_lang must be one of"):
+        ai_edge.cached_draft(EN, "fr")
+
+
+def test_cached_draft_sees_what_ai_edge_wrote(env, monkeypatch):
+    """One cache, one key derivation. If these ever diverge the panel shows nothing
+    while the CLI shows a draft, and nobody knows why."""
+    _warm(monkeypatch)
+    assert ai_edge.cached_draft(EN)["draft"] == ai_edge._cache_get(
+        ai_edge._cache_key(EN, "sw", "gemini-test"))["draft"]
+
+
+def test_a_selftest_string_that_never_varies_cannot_reach_the_provider(env, monkeypatch):
+    """Why --selftest takes its own text. This is the bug that made two live checks
+    unfalsifiable: the second run of a fixed string is a cache read."""
+    calls = _stub(monkeypatch, SW)
+    ai_edge.ai_edge("translate", {"text": ai_edge.SELFTEST_TEXT, "target_lang": "sw"})
+    ai_edge.ai_edge("translate", {"text": ai_edge.SELFTEST_TEXT, "target_lang": "sw"})
+    assert len(calls) == 1
+    ai_edge.ai_edge("translate", {"text": ai_edge.SELFTEST_TEXT + " Now.",
+                                  "target_lang": "sw"})
+    assert len(calls) == 2

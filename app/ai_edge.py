@@ -70,6 +70,28 @@ approver, who is the only safeguard that matters.
 `status: "edge unusable"` still carries the rejected `draft`, so an operator can see
 what came back and judge whether the check was too strict. A caller must render it
 as REJECTED. Only `status == "DRAFT"` is a draft.
+
+Serving a draft is not making one (D-060)
+------------------------------------------
+The order is `gate -> cache -> key -> provider`. A key is required to MAKE a draft,
+never to SERVE one, and the cache key does not contain it. Before D-060 an empty key
+blocked a cached draft while a garbage key sailed straight past it - one of those two
+had to be wrong. If `.env` fails to load on demo morning, seventy-two rehearsed
+Swahili drafts still render, each flagged `cached: True`. The gate stays in front of
+everything: `AI_EDGE_LIVE=0` means do not use the edge, and a cache is part of the
+edge.
+
+`cached_draft(text, lang)` is the read-only door for a page render. It never calls
+the provider, never writes, and returns `None` on a miss. A round trip to Google was
+measured at 11.3 s on the pilot VPS (a degraded IPv6 route, since fixed), and the
+free tier is ~10 RPM against 72 broadcasts. A page that calls the provider in its
+render path is not a page. `cached_draft` is ungated on purpose: `AI_EDGE_LIVE`
+governs whether we may speak to a model, and reading a draft we already have does
+not speak to anyone.
+
+Any live probe of this module that reuses a previously translated string is
+unfalsifiable, because it never reaches the provider. `--selftest` therefore takes
+its own text.
 """
 import hashlib
 import json
@@ -119,6 +141,8 @@ SYSTEM = (
     "proper name (bridges, clinics, villages) exactly as written, untranslated. "
     "Return only the translation, as plain text, with no quotes and no markdown."
 )
+
+SELFTEST_TEXT = "Do not try to cross."
 
 MAX_EXPANSION = 3.0     # a translation is not an essay
 MIN_CONTRACTION = 0.3   # nor a summary
@@ -238,17 +262,21 @@ def ai_edge(task, payload):
     base = {"task": task, "target_lang": lang, "source_text": text,
             "draft": None, "approved": False, "warnings": [], "retried": False}
 
+    # D-060. Gate, then cache, then key, then the provider. A key is needed to MAKE
+    # a draft, not to SERVE one. The gate is in front of both: `AI_EDGE_LIVE=0`
+    # means do not use the edge, and the cache is part of the edge.
     if not _edge_live():
         return dict(base, status=DISABLED)
-    key = _api_key()
-    if not key:
-        return dict(base, status=UNAVAILABLE, reason="no GEMINI_API_KEY")
 
     model = _model()
     ck = _cache_key(text, lang, model)
     hit = _cache_get(ck)
     if hit:
         return dict(hit, cached=True, approved=False)
+
+    key = _api_key()
+    if not key:
+        return dict(base, status=UNAVAILABLE, reason="no GEMINI_API_KEY")
 
     prompt = f"Translate into {TARGET_LANGS[lang]}:\n\n{text}"
     attempt, retried = 0, False
@@ -286,6 +314,32 @@ def ai_edge(task, payload):
     return dict(out, cached=False)
 
 
+def cached_draft(text, lang="sw"):
+    """A draft we already have, or None. The read-only door (D-060).
+
+    Never calls the provider, never writes, never blocks on a network. This is the
+    only function a page render may call: a round trip is seconds, the free tier is
+    ten requests a minute, and sixty-two villages is not a page load.
+
+    Ungated. `AI_EDGE_LIVE` governs whether we may speak to a model; reading a draft
+    that already exists speaks to nobody. `approved` is forced False on the way out -
+    the cache stores proposals, never approvals.
+    """
+    text = (text or "").strip()
+    lang = (lang or "").strip()
+    if lang == "lum":
+        raise AIEdgeRefused(
+            "the edge will never generate Lumasaba (D-052), so it can never have "
+            "cached one. Write it in data/messages.csv.")
+    if lang not in TARGET_LANGS:
+        raise AIEdgeRefused(
+            f"target_lang must be one of {sorted(TARGET_LANGS)}, got {lang!r}")
+    if not text:
+        return None
+    hit = _cache_get(_cache_key(text, lang, _model()))
+    return dict(hit, cached=True, approved=False) if hit else None
+
+
 def draft_swahili(message):
     """Convenience for a rendered message from `messages.render()`.
 
@@ -301,11 +355,15 @@ def draft_swahili(message):
 def _cli(argv):
     if not argv:
         print("usage: python -m app.ai_edge <hazard_id> [--limit N]")
-        print("       python -m app.ai_edge --selftest")
+        print("       python -m app.ai_edge --selftest [text]")
         return 2
     if "--selftest" in argv:
-        r = ai_edge("translate", {"text": "Do not try to cross.",
-                                  "target_lang": "sw", "preserve": []})
+        # D-060. A fixed string cannot reach the provider once it is cached, so a
+        # selftest that never varies its text can never fail. Pass your own.
+        i = argv.index("--selftest")
+        text = (argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("-")
+                else SELFTEST_TEXT)
+        r = ai_edge("translate", {"text": text, "target_lang": "sw", "preserve": []})
         print(json.dumps(r, indent=1, ensure_ascii=False))
         return 0 if r["status"] in ("DRAFT", DISABLED) else 1
 
