@@ -572,9 +572,10 @@ __SCAN__
 <form method='post' action='/demo/emergency' style='display:inline'><button class='alt'>Emergency trigger (Q10)</button></form>
 <form method='post' action='/scan' style='display:inline'><button class='scan'>Run live GloFAS scan</button></form>
 <form method='post' action='/demo/clear' style='display:inline'><button class='clear'>Clear</button></form>
-<p class='cap'>At <b>alert</b> the fragility table scores both Manafwa town bridges
-AT_RISK — engineered structures, not severed. Nothing is cut and nobody is isolated.
-That is the table refusing to cry wolf. <b>Emergency</b> is the Q10 flow: 19.37 m³/s,
+<p class='cap'>At <b>alert</b> — the Q5 flow — five crossings go likely-impassable:
+the fords, and the crossings nobody has classified, which we score as the <i>most</i>
+fragile structure, never the least. Not one settlement loses its road to a clinic. That
+is the fragility table refusing to cry wolf. <b>Emergency</b> is the Q10 flow: 19.37 m³/s,
 reached in 1997, 1998 and 2002.</p>
 <div class='sum'>__SUMMARY__</div>
 <div>__LEGEND__</div>
