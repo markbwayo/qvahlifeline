@@ -3,6 +3,41 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 21 — Phase 2 item 4a: the broadcast layer (D-051..D-054)
+- What changed: app/messages.py new (341 lines): load_messages, facts_for, render,
+  messages_for, CLI. data/messages.csv v1.0 (3 English templates, lum pending).
+  ontology.py gains BROADCAST_STATES, MESSAGE_SLOTS, TEMPLATE_LANGS, CAP_* -> v0.4.
+  09 -> v1.4 (message contract + CAP table). 07 item 1 rewritten. Docs before code.
+- The direction: Lumasaba is DATA, not model output (D-052). No Gemini key existed
+  when the call was made, so its Lumasaba could not be graded — and a fluent
+  mistranslation of "do not cross" is an impact decision by a model in the one
+  channel nobody can audit. Key now obtained; it buys a Swahili DRAFT, nothing more.
+- WRONG-CLAIM CAUGHT BEFORE CODE: my own draft said "cut within {lead_time} hours".
+  lead_time_hrs is the district engineer's completion deadline, not the water's
+  arrival. Not a slot. CAP urgency is therefore `Unknown`, never derived (D-051).
+  Option B (store GloFAS peak_date) considered and cut under rule 6.
+- THE LOADER REFUSED MY OWN SENTENCE: "There is no other road" trips the
+  alternate-route blacklist. `in` cannot read English; negation flips meaning. Guard
+  kept, template reworded to "It is the only road" — which is what the BFS proved
+  and is the stronger line (D-053).
+- CAP certainty reads D-027's confession: a blocking crossing that was assumed to be
+  a ford makes its dependent villages `Possible`, not `Likely`. The token lives in
+  the CROSSING's chain, so it is looked up, never re-derived.
+- Tested + result: tests/test_messages.py 35 new + prior = 251 passed. FOURTEEN
+  negative controls; TWO came back "NOTHING RED — GUARD UNTESTED" and exposed holes
+  in my tests, not the code: (a) the CAP-verbatim test used an action with no
+  semicolon, so a truncating paraphrase passed; (b) the lead_time test used a bridge
+  template while the control widened the settlement whitelist. Both rewritten, both
+  now red on the break.
+- ontology v0.3 -> v0.4 reddened a UI test asserting the literal string. Never assert
+  a version literal; test_map_ui.py now reads ONTOLOGY_VERSION.
+- Live: <fill: python -m app.messages <hid> --lang en on the real graph>
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 4b — app/ai_edge.py (one function, urllib, no new dependency,
+  Gemini free tier, Swahili only, always DRAFT, "edge unavailable" with no key) and the
+  message panel in main.py, showing `missing` templates by village name. Then the three
+  Lumasaba sentences into messages.csv when Bwayo writes them.
+
 ## Session 20 — Phase 2 item 3: the map UI (D-048, D-049, D-050)
 - Spine-name check PASSED: `w128611448` = "Manafwa Bridge (B112 town crossing)",
   `name_source=operator`. D-041 landed and the injection ran on the live DB. No

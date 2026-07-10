@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v1.3 (THE core artifact)
+# 09 — Ontology Specification v1.4 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -326,6 +326,54 @@ the contract is spec'd, not left to the file:
 - The footer attributes the data actually ingested — OSM (ODbL) and GloFAS via
   Open-Meteo — and nothing else. WorldPop is not ingested (D-040); no link infers
   `on_floodplain`, so no SRTM.
+
+## Broadcast messages (data/messages.csv) v1.0
+
+`object_type, state, hazard_kind, lang, template`
+
+The last mile is a chief with a radio. What reaches him is the only output of this
+system a judge cannot audit, because it is not in English. So it is not generated.
+
+- **The sentence is committee data**; the **facts come from the impact's own why-chain**
+  and nowhere else. Not a second traversal, not a regex over `trigger_detail`, not a
+  model. The AI edge may later draft an English polish or a Swahili translation, marked
+  DRAFT and human-approved. **Lumasaba is never generated** (D-052).
+- **`ontology.BROADCAST_STATES`** decides which impacts a community is warned about:
+  `settlement/ISOLATED`, `bridge/IMPASSABLE`, `bridge/LIKELY_IMPASSABLE`. A template for
+  any other state is refused at load. An officer does not need a message; he needs a
+  task, and the playbook already gives him one with an owner and a lead time.
+- **`ontology.MESSAGE_SLOTS`** is a per-type whitelist and the enforcement point for
+  D-051: `lead_time` and `threshold` are not slots, so they cannot enter a broadcast by
+  a typo. A slot typo raises with its line number.
+- **A slot that cannot be filled RAISES.** "The road to  crosses ." is worse than no
+  message. A nameless crossing renders as its object id, never as blank (09, v0.9).
+- **A `lang != en` row with no `en` row for the same triple is refused.** English is what
+  the system degrades to; a translation with nothing behind it degrades to silence.
+- **An `ISOLATED` message may not contain a road-alternate phrase.** The list also
+  matches *denials* — "there is no other road" is refused alongside "take the other
+  road" — because `in` cannot read English and negation flips meaning. It refuses in the
+  safe direction, at load, loudly. Say "It is the only road" instead (D-053).
+- **Every broadcast-required impact with no template in the requested language is
+  reported by name.** A village warned in a language nobody reads, with no sign on the
+  officer's screen that its own was never written, is the last-mile form of a false
+  all-clear (invariant 6). `messages_for()` returns `missing` and `errors` separately: a
+  missing template is a committee gap, a template that will not fill is a bug.
+
+### CAP alignment (v1.4)
+Every field is derived from something the engine computed. Nothing is invented to fill a slot.
+
+| CAP field | Source |
+|---|---|
+| `event` | `hazard.kind (severity)` |
+| `severity` | `ontology.CAP_SEVERITY`: watch→Moderate, alert→Severe, emergency→Extreme |
+| `certainty` | `Possible` if the blocking crossing's why-chain declares `assumed_structure:` (D-027), else `Likely` |
+| `urgency` | **`Unknown`, always.** CAP urgency is a TIME. The trigger is a discharge return period; `lead_time_hrs` is an owner's completion deadline. We do not model arrival time (D-051) and will not write a value we never computed |
+| `area` | the impacted object's name |
+| `instruction` | the impact's playbook actions, **verbatim**, ordered by `(lead_time_hrs, owner_role, action_text)` |
+
+`instruction` is the only correct home for `action_text`: prose would have to paraphrase
+committee words, and an impact can carry more than one action (the B112 deck carries two
+at 24 h), so "the action" is not a fact about an impact.
 
 ## Invariants (test these forever)
 1. Same inputs → same impacts **and same why-chains**, always.

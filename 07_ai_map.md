@@ -13,11 +13,16 @@ identical outputs, always, and every output self-explains via its why-chain. A
 hallucinated "bridge out" wastes an evacuation; a hallucinated "all clear" can kill.
 
 ## AI edges (each behind the single adapter `ai_edge(task, payload) -> draft`)
-1. **Message drafting & translation (the big one):** the engine emits structured
-   facts (asset, state, why, action, owner, lead time, CAP-aligned fields); the edge
-   drafts broadcast-ready text in English + local languages (Swahili, Lumasaba, ...).
-   Always marked DRAFT; a human approves before anything is sent. This is the honest
-   answer to the region's hundreds-of-languages problem.
+1. **Message drafting & translation:** the engine emits structured facts (asset, state,
+   why-chain, hazard, severity, CAP-aligned fields). Broadcast text comes from
+   `data/messages.csv` — committee-authored templates whose slots the engine fills
+   deterministically. **Lumasaba is data, never generated** (D-052): it is the language
+   that reaches the last mile, the one models are worst at, and the one nobody in the
+   room can audit. The edge drafts **English polish and Swahili translation only**,
+   always marked DRAFT, always human-approved before sending. The honest answer to the
+   region's hundreds-of-languages problem is not to generate them — it is to make the
+   committee's own words a first-class artifact and let the model help where it can be
+   checked.
 2. **Ingestion cleanup:** OSM tags are messy ("footbridge"? "ford"? name missing).
    The edge proposes object types/names for ambiguous features; a rule or the
    operator confirms before the object enters the graph.
@@ -31,8 +36,13 @@ hallucinated "bridge out" wastes an evacuation; a hallucinated "all clear" can k
 ## Provider policy
 Default Gemini API free tier; one adapter function so the provider can swap in an
 afternoon; no resident model on the VPS; no Anthropic API in production. Edge failure
-degrades gracefully: the system runs fully without AI (English template text), which
+degrades gracefully: With no API key, or a dead endpoint, the edge returns `edge unavailable`; English and
+   Lumasaba render regardless, because neither passes through a model. This is not a
+   fallback bolted on — it is the architecture. the system runs fully without AI (English template text), which
 is itself a resilience talking point.
+With no API key, or a dead endpoint, the edge returns `edge unavailable`; English and
+Lumasaba render regardless, because neither passes through a model. That is the
+architecture, not a fallback bolted onto it.
 
 ## The pitch line worth memorising
 "Everyone else points AI at the forecast. We point deterministic engineering at the
