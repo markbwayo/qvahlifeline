@@ -3,6 +3,174 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 20 — Phase 2 item 3: the map UI (D-048, D-049, D-050)
+- Spine-name check PASSED: `w128611448` = "Manafwa Bridge (B112 town crossing)",
+  `name_source=operator`. D-041 landed and the injection ran on the live DB. No
+  links.py work needed. 35 crossings reconcile: 16 OSM + 1 operator-only culvert
+  + 18 synth. Three are named.
+- What changed: app/main.py rewritten (593 lines). tests/test_map_ui.py new (29).
+  09 -> v1.3 (the read side). D-048..D-050. Docs committed before code.
+- THREE LIVE BUGS, all on the read side, engine untouched and correct throughout:
+  (1) both demo buttons called demo_flood() -> scope=reach -> 0 ISOLATED / 43
+  REROUTED. Anyone opening port 8017 saw a calm district. (2) the action query had
+  NO hazard filter (852 rows, five hazards) and sorted by lead time (three unnamed
+  12 h fords above the 24 h B112 that cuts 51 villages). (3) COLORS.get(state,
+  OK_GREEN) — a state with no colour would render as a healthy asset.
+- Also closed: 32 of 35 crossings rendered as "(unnamed bridge)", the same string
+  for w747829218 (cuts 8) and 18 synth candidates -> object id, per 09 v0.9.
+  Coverage panel always rendered (uncovered vs unfired distinguished). Scan banner
+  has four states. Footer no longer attributes WorldPop/SRTM (never ingested).
+  db.init()/seed moved out of import into a FastAPI lifespan so a test can point
+  db.DB_PATH at a temp file.
+- The alert button KEPT and captioned (Bwayo's call): at Q5 both town bridges are
+  AT_RISK, nothing severs. The table refusing to cry wolf, made clickable.
+- Tested + result: tests/test_map_ui.py 29 new + prior = 216 passed. FOURTEEN
+  negative controls run; each reddens exactly the tests it should, listed in the
+  session transcript. The COLORS fallback control found a live latent all-clear.
+- actions.generate() is now unused. Left in place (test-locked); retire post-hackathon.
+- Live: <fill: impacts/actions on screen, spine label, scan banner text>
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 4 — message drafts at the AI edge (D-009, 07): the engine's
+  structured facts in, English + Lumasaba/Swahili wording out, CAP-aligned, marked
+  DRAFT, human-approved, behind one adapter, Gemini free tier. The engine never sends.
+
+## Session 19 — Phase 2 item 2: live GloFAS triggers (D-047)
+- What changed: hazards.py gains _get/_cached/_check_cell/reanalysis/forecast,
+  annual_maxima/weibull_q, load_triggers/load_reach_points/thresholds, and a real
+  scan_live(). New data/reach_glofas.csv (operator-verified cells) and
+  data/triggers.csv (severity -> return period). 09 -> v1.2; D-047; 08 limits updated.
+  Docs committed before code.
+- THE FINDING: the 4.3 km demo reach w188321163 straddles THREE 0.05 deg GloFAS cells
+  reading 67.7 / 6.1 / 91.5 m3/s mean - non-monotonic downstream, so two of them model
+  a DIFFERENT river. GloFAS resolves one channel per 5 km cell. A dead cell reads 0.0
+  and screams; a wrong cell reads 91.5 and looks like data. Cells are therefore
+  operator-verified, never snapped. A "pick the highest-discharge cell" heuristic was
+  proposed and WITHDRAWN - it selects 91.5, the wrong water.
+- Also found: the reanalysis serves from 1997, not the requested 1984. n=29, not 42.
+  reanalysis() now asserts the served window. Q10 rests on the 3rd-largest peak; Q20
+  interpolates the top two; Q50 does not exist. Gumbel gives Q10=17.5 vs empirical 19.4
+  by flattening the 1998 El Nino outlier -> empirical only, capped at Q20 (Bwayo's call).
+- Decisions taken (Bwayo): Weibull empirical / annual maxima / watch=Q2, alert=Q5,
+  emergency=Q10. Manafwa @ Bubulo: 12.37 / 14.81 / 19.37 m3/s. Emergency exceeded in
+  1997, 1998, 2002 - three years in twenty-nine. The 62 is now "a 1-in-10-year flow".
+- 0 of 33 river reaches are dead cells. 4 distinct cells cover all 33. 32 remain
+  unverified: they cannot trigger, they are named in every scan, and scope=river
+  (D-036) means one verified point floods the whole connected channel.
+- Tested + result: tests/test_glofas_triggers.py (35 new) + prior = 187 passed.
+  Seven NEGATIVE CONTROLS run: swallowed fetch failure / empty series / drifted cell /
+  extrapolation past the record / dead cell as calm water / inverted severity ladder /
+  stacked duplicate hazards - each break reddens exactly one test. The first control
+  caught a test of mine that asserted a guarantee it never checked (it replaced _get
+  wholesale). Fixed before shipping.
+- Live tonight: forecast peak ~6.19 m3/s vs watch 12.37 -> quiet river, no hazard,
+  numbers reported. The demo therefore stays USE_LIVE=0 (D-008), as planned.
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 3 — map UI (app/main.py). States on the map, why-chain panel,
+  action list ordered by consequence with the precautionary flag visible. FIRST CHECK:
+  does the spine marker read "Manafwa Bridge (B112 town crossing)" or still
+  w128611448? If the latter, main.py isn't reading objects.name. Also surface
+  `uncovered` impacts and the live-scan status — a disabled scan must never render as
+  a calm river.
+
+## Session 18 — D-045 consequence ordering, and D-046, the bug it hid
+- What changed: app/actions.py gains _dependents()/_carrier_counts(); actions_for()
+  returns `consequence`, `carriers`, `precautionary`, ordered consequence-then-lead-time.
+  No engine change. 09 -> v1.1; D-045, D-046 logged. Docs committed BEFORE code.
+- D-045: a blocked crossing fires its closure action regardless of carriers or
+  dependents. Zero dependents is a fact about OUR graph (7 bare OSM ford nodes have no
+  carrier within 100 m), not the world. Suppressing would let a link-inference gap
+  silence a warning (invariant 6). Suppression needs an operator classification in
+  operator_crossings.csv, never a code rule. Regression-proved: wrote the "skip
+  zero-carrier crossings" tidy-up; the new test goes red on it.
+- Ordering bug fixed: by lead time alone, three unnamed fords (12h) printed above the
+  B112 deck (24h) that cuts 51 villages. Urgency is not consequence.
+- D-046, found by reading the live output, not by a test: both schools came back
+  `consequence=0, precautionary=True` while isolated_from said 3 settlements lost a
+  school. Cause — a settlement stores ONE why-chain, so a village losing clinic AND
+  school records only the clinic; counting ISOLATED chains alone left the school with
+  zero dependents. `precautionary` next to a shelter check for a school 3 villages just
+  lost is an under-warning. propagate.py was correct all along: it writes the victims
+  into the facility's own chain. The read side never looked. Now it does — charged to
+  the FACILITY only, never to the bridges in that chain (their list is a union across
+  all its lost settlements; cross-charging would let w128611448 claim w747829218's 8).
+  Spine consequence unchanged at 51.
+- Unplanned finding, keep for the pitch: `precautionary` is NOT "no carrier".
+  w902422828 (Old Manafwa bridge) is blocked, HAS 2 carrier roads, and has consequence
+  0. D-038 is now a data field, not just a line in the script.
+- Tested + result: 41 in tests/test_playbook_actions.py (7 new) + prior = 152 passed.
+  Both D-046 tests verified against the pre-fix code: W1 fails with 0 dependents.
+- Live: <fill: precautionary count, the two schools' dependents, spine = 51>.
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 2 — hazards.scan_live: GloFAS triggers, return-period-relative
+  (D-005), require_reach() on every target (D-028), cached in db.geocache, USE_LIVE=0
+  always works (D-008). Elgon discharge is 4–7 m³/s absolute — the trigger is relative,
+  never absolute. One real judgement call waits: Open-Meteo returns a discharge series
+  and no return periods. We decide explicitly what "return-period-relative" means, and
+  log it, before a line of code.
+
+## Session 17 — Phase 2 item 1: the action layer (D-043, D-044)
+- What changed: app/actions.py rewritten (load_playbook, fire_actions, actions_for,
+  clear_actions, generate() alias for main.py, CLI `python -m app.actions <hid> |
+  --validate`); data/playbook.csv v1.0 = 18 actions over 13 (object_type, state,
+  hazard_kind) triples; ontology.py gains HAZARD_KINDS, -> v0.3. 09 -> v1.0.
+- PROCESS BREACH, recorded not hidden: the code commit (1bcc1d4) landed BEFORE the
+  docs commit. Hard rule 3 says spec first. Docs pushed immediately after. No
+  divergence resulted, but the ordering must not repeat — the docs block goes in the
+  same message as the file downloads next time.
+- The risk this step closes: an impact with no playbook row fires nothing and renders
+  as a red village with an empty action column — indistinguishable from "no action
+  needed". fire_actions RETURNS every `uncovered` impact by name. Proved by running
+  the new test against a naive fire (look up, insert if found, move on): it reports
+  success and never mentions the two ISOLATED villages.
+- Also closed at CSV load: an ISOLATED action may not contain a road-alternate phrase.
+  The BFS proved there is none; Old Manafwa bridge fails in the same flood (D-038).
+- main.py calls actions.generate(hid) (Phase 0 name). Kept as a documented wrapper
+  around fire_actions(); retire when main.py is rewritten (Phase 2 item 3). Test-locked.
+- Tested + result: tests/test_playbook_actions.py (34 new: loader guards, invariant 4
+  both halves, invariant 5 idempotence, invariant 1 ordering, coverage of every state
+  the engine can emit) + prior = 145 passed on the VPS.
+- LIVE, demo_flood_river("emergency"), real graph: 77 impacts -> 213 actions,
+  uncovered NONE. By state: ISOLATED 186 (62 villages x 3), IMPASSABLE 10,
+  LIKELY_IMPASSABLE 10, SERVICE_AT_RISK 6, SEVERED 1. By owner: DDMC comms 72,
+  DDMC health 62, DDMC relief 62, district engineer 11, DHO 4, DEO 2.
+- FOUND (for the map UI, not an engine bug): sorted by lead time, the list opens with
+  three unnamed ford NODES (n8381841167/69/78) at 12h, above the B112 bridge that cuts
+  51 villages at 24h. Ordering is by urgency, not consequence. Action panel must group
+  by consequence. Open question for Bwayo: should a blocked crossing with ZERO carrier
+  roads (7 of them, limitation #3) fire a closure action at all?
+- Days to deadline: 21 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 2 — hazards.scan_live: GloFAS triggers, return-period-
+  relative (D-005), require_reach() on every target (D-028), cached in db.geocache,
+  USE_LIVE=0 always works (D-008). Elgon discharge is 4–7 m³/s absolute — the trigger
+  is relative, never absolute.
+
+## Session 17 — Phase 2 item 1: the action layer (D-043, D-044)
+- What changed: app/actions.py rewritten (load_playbook, fire_actions, actions_for,
+  clear_actions, CLI `python -m app.actions <hazard_id> | --validate`);
+  data/playbook.csv v1.0 = 18 actions over 13 (object_type, state, hazard_kind)
+  triples; ontology.py gains HAZARD_KINDS, -> v0.3. 09 -> v1.0 (playbook contract).
+- The risk this step closes: an impact with no playbook row fires nothing and renders
+  as a red village with an empty action column — indistinguishable from "no action
+  needed". fire_actions now RETURNS every `uncovered` impact by name. Proved by
+  running the new test against a naive fire (look up, insert if found, move on):
+  it reports success and never mentions the two ISOLATED villages.
+- Also closed: ISOLATED actions may not contain a road-alternate phrase (the engine
+  proved there is none; Old Manafwa bridge co-fails). Enforced at CSV load.
+- Tested + result: tests/test_playbook_actions.py (33 new: loader guards, invariant 4
+  both halves, invariant 5 idempotence, invariant 1 ordering, coverage of every state
+  the engine can emit) + prior = 144 passed.
+- Live on the real graph: 77 impacts -> <fill> actions, uncovered <fill>.
+- Days to deadline: 21 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 2 — hazards.scan_live: GloFAS triggers, return-period-
+  relative (D-005), require_reach() on every target (D-028), cached in db.geocache,
+  USE_LIVE=0 always works (D-008). Elgon discharge is 4–7 m³/s absolute — the trigger
+  is relative, never absolute.
+- main.py calls actions.generate(hid) (Phase 0 name). Kept as a documented wrapper
+  around fire_actions() so the app survives this commit untouched; retire it when
+  main.py is rewritten (Phase 2 item 3). Locked by a test.
+- Open for the map UI: main.py's action panel does not yet surface `uncovered`
+  impacts. A red village with no action must show WHY it has none.
+
 ## Session 16 — Step B closed: the demo numbers are real
 - What changed: no code. Ran `demo_flood_river("emergency")` on the real graph and read
   the result for the first time. 09 → v0.9; D-038..D-042 logged; 08 storyline filled.

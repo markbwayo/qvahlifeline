@@ -30,8 +30,8 @@
    ford, clinic, school, water point and village, and the dependencies between them.
    As a civil engineer from this region, I have built crossings like these. This graph
    is engineering knowledge, digitised."
-2. **The hazard:** "GloFAS puts the Manafwa above its high return-period flow. Watch."
-   *(click)*
+2. **The hazard:** "GloFAS puts the Manafwa at its ten-year flow — 19.4 cubic metres
+   per second. That level was reached in 1997, 1998 and 2002. Watch." *(click)*
 3. **The propagation:** Manafwa Bridge — the B112, the town's only tarmac crossing —
    turns red. Sixty-two villages flag ISOLATED. Why-chain opens:
    flood → Manafwa reach → Manafwa Bridge → Bumayeku B → Namuembi Medical Centre.
@@ -58,6 +58,12 @@
   bridge and the 62 does not move. It is topology, not assumption."
 - **Scale:** "Sixty-two named settlements. We do not have population per village and we
   will not estimate one on this stage."
+- **Trigger:** "The threshold is not a number I chose. It is the tenth-largest of
+  twenty-nine annual peaks in the GloFAS reanalysis for the cell that contains the
+  town bridge — a cell I verified by hand, because the two cells either side of it
+  model a different river and read twenty times the discharge. We compute Q2, Q5 and
+  Q10 from the record. We refuse to compute Q50, because twenty-nine years cannot
+  support it."
 
 ## Submission checklist (Phase 4, 26–30 Jul)
 - [ ] Working deployment on VPS (port 8017) + `USE_LIVE=0` fallback tested
@@ -66,8 +72,11 @@
 - [ ] Architecture diagram (schematic in this bundle, refreshed)
 - [ ] Repo README presentable; ODbL/CC-BY/data attributions visible in UI footer
 - [ ] Honest-limits paragraph: OSM completeness; GloFAS ~5 km grid is screening-grade
-      at village scale; fragility rules are engineering heuristics v1; single-carrier
-      crossings over-state the break (road ways not yet split at crossings); 7 bare ford
+      at village scale — three cells under one 4.3 km reach disagree 23x, so the
+      trigger cell is operator-verified, not snapped; thresholds are empirical over
+      29 annual maxima (1997–2025) and the code refuses to extrapolate past Q20;
+      fragility rules are engineering heuristics v1; single-carrier crossings
+      over-state the break (road ways not yet split at crossings); 7 bare ford
       nodes have no carrier road; demo severity is `emergency`, not a routine season
 - [ ] Submit **30 July**, confirm receipt
 

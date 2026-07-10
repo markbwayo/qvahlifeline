@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v0.9 (THE core artifact)
+# 09 — Ontology Specification v1.3 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -166,14 +166,166 @@ committee knowledge always outranks the algorithm.
    hashes per process, so set iteration order is not stable across runs — unsorted BFS
    silently broke invariant 1 by producing different why-chains for identical input.
 
-## Action playbook (data/playbook.csv)
+## Hazard triggers (v1.2) — GloFAS → severity
+
+`data/reach_glofas.csv` (operator-verified points) × `data/triggers.csv`
+(committee-tunable severity → return period) → `hazards.scan_live()`.
+
+### The GloFAS point is verified, never snapped
+- A `river_reach` triggers only if an engineer has signed a GloFAS cell for it in
+  `data/reach_glofas.csv` (`reach_id, glofas_lat, glofas_lon, note, verified_by`).
+  A row without `verified_by` is refused at load: an unsigned point is an auto-snap.
+- **Why.** Open-Meteo snaps a request to the centre of a ~0.05° (~5 km) cell, and
+  GloFAS models ONE channel per cell — the one with the largest accumulated upstream
+  area. Measured on the pilot: the 4.3 km demo reach `w188321163` straddles THREE
+  cells reading 67.7, 6.1 and 91.5 m³/s mean, non-monotonic downstream. Water does not
+  do that; two of those cells model a different river. A dead cell reads 0.0 and
+  screams. A wrong cell reads 91.5 and looks like data. Geometry proposes
+  (`scripts/glofas_probe.py`), the engineer signs.
+- The served cell is re-checked on every fetch against the verified one
+  (`CELL_TOLERANCE_DEG = 0.03`). A drift means the thresholds no longer describe the
+  water that was verified: refuse.
+- An **unverified** river reach cannot raise a hazard, and every scan reports the count
+  by name. Under `scope=river` one verified reach floods the whole connected channel,
+  so the pilot needs one point, not thirty-three. `waterway=stream` reaches are outside
+  riverine triggers (D-036) and are not counted as a coverage gap.
+
+### Thresholds are empirical and refuse to extrapolate
+- **Annual maximum series**, one peak per calendar year — one flood population.
+  Seasonal maxima would double n but mix a lesser season's peaks into the sample.
+- **Weibull plotting position**, `T = (n+1)/m`. No distribution is fitted.
+  `MAX_RETURN_PERIOD = 20`: beyond it the code raises rather than answering, and
+  `weibull_q` returns `None` for any T beyond the record — which a caller must treat as
+  *unanswerable*, never as *not exceeded*.
+- **Why not a fitted curve.** The reanalysis serves from **1997, not 1984** (the API
+  silently clips the requested window — `reanalysis()` asserts the served window rather
+  than trusting the request). n = 29. Q10 rests on the third-largest peak; Q20
+  interpolates between the top two; Q50 does not exist. A Gumbel fit returns Q10 = 17.5
+  against the empirical 19.4 because it flattens the 1998 El Niño outlier. A fitted
+  number past the record is an extrapolation wearing a decimal point.
+- Fewer than `MIN_ANNUAL_MAXIMA = 20` years → refuse to threshold.
+
+### severity → return period is data
+| severity | T | Manafwa @ Bubulo (m³/s) | exceeded |
+|---|---|---|---|
+| watch | Q2 | 12.37 | ~15 of 29 years |
+| alert | Q5 | 14.81 | ~6 of 29 |
+| emergency | Q10 | 19.37 | 1997, 1998, 2002 |
+Return periods must **strictly increase** with severity — a watch rarer than an
+emergency inverts the ladder silently, and is refused at load.
+
+### The scan
+`scan_live()` takes the forecast peak over the next 7 days and raises a hazard at the
+**highest severity actually exceeded**, `scope=river`, `source=GloFAS/Open-Meteo`, with
+the peak, the threshold, the return period, the record length and the ~5 km caveat in
+`trigger_detail`. One hazard per reach per severity per UTC day.
+
+**A fetch failure, an empty series, a dead cell, a drifted cell, a short record or a
+missing verified point all RAISE.** None of them returns a clean empty result. "No
+hazard" and "we could not look" must never render identically on a map (invariant 6).
+`USE_LIVE=0` returns an explicit *disabled* status, never `triggered: []` alone.
+
+## Action playbook (data/playbook.csv) v1.0
 `object_type, state, hazard_kind, action_text, owner_role, lead_time_hrs`
-Examples: settlement+ISOLATED+riverine_flood → "Send pre-agreed local-language alert
-to chief & radio; verify boat/alternate crossing" (owner: DDMC comms, 48h);
-clinic+SERVICE_AT_RISK → "Pre-position essential drug kit on far side of crossing"
-(owner: DHO, 72h); bridge+LIKELY_IMPASSABLE → "Deploy inspection; stage closure
-signage" (owner: district engineer, 24h). The committee owns this table; the tool
-fires it.
+
+- **Match is an exact triple** `(object_type, state, hazard_kind)`. There are no
+  wildcards: a `*` row can silently shadow a specific one (D-043). Several rows may
+  share a triple — all of them fire, sorted by `(lead_time_hrs, owner_role,
+  action_text)` so the action list is identical on every run (invariant 1).
+- Every row is validated against the ontology at load: `object_type ∈ OBJECT_TYPES`,
+  `state ∈ STATE_ORDER` (never `OK` — an OK object has no impact), `hazard_kind ∈
+  HAZARD_KINDS`, non-empty `owner_role` (an action nobody owns is not an action),
+  integer `lead_time_hrs ≥ 0`, no duplicate rows. A bad row raises with its line
+  number. `ontology.HAZARD_KINDS` is the registry the CSV is checked against.
+- **An impact with no matching row is `uncovered`, and is reported, never dropped.**
+  `fire_actions()` returns every uncovered impact and the CLI prints it. A red village
+  with no action beside it is indistinguishable on screen from "nothing to do" —
+  the action-layer form of a false all-clear (invariant 6). The committee may
+  legitimately choose not to act on `bridge AT_RISK`; it may never do so invisibly.
+- **An `ISOLATED` action must never propose a road alternate.** The BFS has proved
+  there is none, and on the Manafwa spine the only candidate (Old Manafwa bridge)
+  fails under the same flood (D-038). Enforced at load: `alternate route`,
+  `alternative route`, `detour`, `reroute`, `another route` are rejected in ISOLATED
+  rows. Verifying a boat or foot crossing is not a road route and is permitted.
+- Action text is **verbatim** from the CSV. No interpolation, no model. The AI edge
+  may later translate an action for broadcast (marked DRAFT, human-approved); it
+  never selects or writes one (hard rule 1, `07`).
+- Firing is idempotent: `fire_actions()` clears this hazard's actions and rebuilds
+  them; `clear_derived()` removes them with their impacts (invariant 5).
+
+Examples: settlement+ISOLATED+riverine_flood → "Send the pre-agreed local-language
+alert to the chief by radio and WhatsApp; state plainly that no road alternate exists"
+(owner: DDMC comms, 48h); clinic+SERVICE_AT_RISK → "Pre-position the essential drug kit
+and delivery supplies on the far side of the crossing" (owner: DHO, 72h);
+bridge+LIKELY_IMPASSABLE → "Deploy an inspection team; stage closure signage and
+barriers at both approaches" (owner: district engineer, 24h).
+The committee owns this table; the tool fires it.
+
+### Action ordering and the precautionary flag (v1.1)
+- `actions_for()` returns actions ordered by **consequence** (descending), then
+  `lead_time_hrs`, then object id. `consequence` = the number of **distinct settlements
+  an object is proved to have cut off**, read from the engine's own why-chains at read
+  time — never stored, never re-inferred. Two chain families carry that proof and both
+  must be read:
+    - an **ISOLATED settlement's** chain names the crossing and road that blocked *that*
+      settlement's route; every object in it is charged with that one settlement;
+    - a **SERVICE_AT_RISK facility's** chain lists every settlement that lost it. This
+      family is not optional: a settlement stores only ONE chain, so a village that lost
+      its clinic *and* its school records only the clinic, and the school would otherwise
+      report zero dependents.
+  Victims from a facility chain are charged to the **facility alone**, never to the
+  bridges named in it: that bridge list is a union across all the facility's lost
+  settlements, so charging each bridge with each settlement would let one bridge claim
+  villages another blocked. A bridge earns a dependent only from the ISOLATED chain that
+  names it.
+- **A `SERVICE_AT_RISK` facility can never be `precautionary`.** D-033 grants that state
+  only to a facility some settlement had and lost, so zero dependents on one is
+  arithmetically impossible. Test-locked.
+- **Urgency is not consequence.** Ordered by lead time alone, three unnamed ford nodes
+  (12 h) print above the B112 bridge (24 h) that cuts fifty-one villages. An officer
+  reading top-down must meet the deck that isolates a sub-county before he meets a
+  closure order for a crossing nobody depends on.
+- `precautionary` = `consequence == 0`. Such an action **still fires and still carries
+  full weight** — a flooded ford is a hazard to whoever drives into it. Zero dependents
+  means only that no settlement *in this graph* loses a route through it: either the
+  crossing truly carries no vehicle road, or link inference never found the road it
+  sits on (7 bare OSM ford nodes have no `carries` link within 100 m). A gap in our
+  data may never silence a warning (invariant 6). The flag explains an action; it never
+  suppresses one. Suppression would require an operator classification, not a code rule.
+- `precautionary` is not "no carrier". `w902422828` (Old Manafwa bridge) is blocked,
+  has a carrier road, and appears in zero of the 62 isolated why-chains. It is
+  precautionary because it is never an alternate (D-038), which the field now states
+  in the action list rather than only in the pitch.
+- `carriers` = count of `carries` links into the crossing; `None` for non-crossings.
+
+## The read side (v1.3)
+
+The UI renders; it never decides. It re-implements no rule and re-infers no number.
+Three of this project's bugs lived on the read side while the engine was correct, so
+the contract is spec'd, not left to the file:
+
+- **One hazard.** Impacts and actions are read for exactly one hazard — the newest
+  active one. Never a join across `impacts`/`actions` with no hazard filter, which
+  rendered 852 rows from five hazards, most of them cleared days earlier. When more
+  than one hazard is active the page declares it and shows one; it never blends them.
+- **Consequence, not urgency.** The action list comes from `actions.actions_for()`
+  and keeps its order (D-045, D-046). A page that re-sorts by lead time undoes the
+  decision.
+- **Coverage is always rendered**, including when nothing is uncovered. "No uncovered
+  panel" and "no uncovered impacts" must not look alike (invariant 6). An impact whose
+  playbook triple exists but which fired no action is a BUG and renders as one, not as
+  a committee choice.
+- **Four scan states, never one.** `not run` / `disabled (USE_LIVE=0)` / `feed failure`
+  / `quiet, with numbers`. `scan_live()` raises (D-047); the presentation boundary
+  catches the raise and displays it. It never converts a raise into an empty result.
+- **A crossing with no name renders as its object id** (see *Naming a reconciled
+  crossing*). `(unnamed bridge)` was one string for thirty-two objects, one of which
+  (`w747829218`) cuts off eight settlements.
+- **Every state in `STATE_ORDER` must have a colour**, checked at import. A state with
+  no colour inheriting the OK green is a false all-clear on the map.
+- The footer attributes the data actually ingested — OSM (ODbL) and GloFAS via
+  Open-Meteo — and nothing else. WorldPop is not ingested (D-040); no link infers
+  `on_floodplain`, so no SRTM.
 
 ## Invariants (test these forever)
 1. Same inputs → same impacts **and same why-chains**, always.
