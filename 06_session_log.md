@@ -28,7 +28,25 @@ Newest entry at the top. Start each session by reading this. **Submission: 31 Ju
   negative controls run; each reddens exactly the tests it should, listed in the
   session transcript. The COLORS fallback control found a live latent all-clear.
 - actions.generate() is now unused. Left in place (test-locked); retire post-hackathon.
-- Live: <fill: impacts/actions on screen, spine label, scan banner text>
+- Live: hazard #14, 381 objects / 35 crossings on screen. Emergency: 62 ISOLATED,
+  5 IMPASSABLE, 5 LIKELY_IMPASSABLE, 1 SEVERED, 4 SERVICE_AT_RISK = 77 impacts,
+  213 actions, 0 uncovered, 15 precautionary. Spine reads "Manafwa Bridge (B112 town
+  crossing)" and prints first at 51 cut off; w902422828 reads 0 cut / 2 carriers /
+  precautionary. Alert: 5 LIKELY_IMPASSABLE + 5 AT_RISK, 0 ISOLATED — the fords go
+  amber, the villages keep their road. Scan banner: "has not been run in this
+  deployment" (grey), never silence. Header count corrected 362 -> 381 in 08.
+- Header count corrected 362 -> 381 in 08: 362 is Step A ingest, +1 operator culvert,
+  +18 synth candidates = what the live UI actually shows. A presenter saying 362 while
+  the screen reads 381 hands a judge a free question.
+- PROCESS BREACH, recorded not hidden (second occurrence; first was Session 17): the
+  code commit a77e06d landed before the docs commit, and the docs commit also carried
+  Session 19's uncommitted D-047 spec text and 08 limits. Hard rule 3 says spec first.
+  Cause both times: the docs block is pasted into Notepad by hand while the code files
+  are one click away. Countermeasure from Session 21: run `git status --short` and
+  refuse to `git add app/` while any `.md` is dirty.
+- The spine fires TWO actions at 24 h (DDMC comms warns the boda stages; district
+  engineer inspects and signs). Not a duplicate — two playbook rows share the triple,
+  D-043 fires both. Verified by reading the live rows, not assumed from the count.
 - Days to deadline: 20 (internal 30 Jul).
 - NEXT STEP: Phase 2 item 4 — message drafts at the AI edge (D-009, 07): the engine's
   structured facts in, English + Lumasaba/Swahili wording out, CAP-aligned, marked

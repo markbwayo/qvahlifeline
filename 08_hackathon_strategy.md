@@ -26,10 +26,13 @@
   affected region who has built the exact culverts the model watches.
 
 ## The demo storyline (rehearse until boring)
-1. **The map:** "This is Manafwa district, at Bubulo — 362 real objects: every bridge,
+1. **The map:** "This is Manafwa district, at Bubulo — 381 objects: every bridge,
    ford, clinic, school, water point and village, and the dependencies between them.
    As a civil engineer from this region, I have built crossings like these. This graph
-   is engineering knowledge, digitised."
+   is engineering knowledge, digitised." Thirty-five crossings. Sixteen came from OpenStreetMap, one I classified myself
+   from satellite because no map has it, and eighteen the system found where a road
+   line crosses a river line. It classified none of them. A machine can find a
+   crossing; only an engineer says what it is."
 2. **The hazard:** "GloFAS puts the Manafwa at its ten-year flow — 19.4 cubic metres
    per second. That level was reached in 1997, 1998 and 2002. Watch." *(click)*
 3. **The propagation:** Manafwa Bridge — the B112, the town's only tarmac crossing —
