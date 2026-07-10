@@ -3,6 +3,34 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 22 — Phase 2 item 4b: the AI edge, and the naming gap (D-055, D-056)
+- What changed: app/ai_edge.py new (245 lines, urllib only, no new dependency).
+  messages.py gains `needs_name` + `facts` on render(). 09 -> v1.5; 07 provider policy
+  rewritten. D-055, D-056. Docs before code.
+- THE ARCHITECTURE, in one line: hazards.scan_live() RAISES on every feed failure;
+  ai_edge() NEVER raises on one. A dead gauge reporting "no hazard" is indistinguishable
+  from a calm river. A dead translator costs a convenience — English and Lumasaba render
+  regardless, because neither passes through a model. A REFUSAL is not a failure:
+  target_lang="lum" raises AIEdgeRefused, by name, citing D-052.
+- Sanity checks are what a non-speaker CAN check: not empty, <=3x / >=0.3x source length
+  (a model returning "Usivuke." dropped the instruction), no markdown, no URL, and every
+  proper name from the engine's own `facts` must survive or the approver is warned.
+- Free tier is ~10 RPM against 72 broadcasts, so drafts are cached by (model, lang, text).
+  Failures are never cached. Model is env-configurable (GEMINI_MODEL): Google cut free
+  quotas Dec 2025 and moved 3.x Pro to paid Apr 2026. Key in the x-goog-api-key HEADER,
+  never the URL, so it cannot land in a proxy log. Temperature 0.
+- D-055: 11 of 62 village broadcasts name a bare OSM way id (w747829218 x8, w160219946
+  x3). needs_name reports it with a count; the message still renders. Fix is two operator
+  rows, not code.
+- Tested + result: tests/test_ai_edge.py 25 new + 4 needs_name + prior = 280 passed.
+  FIFTEEN negative controls, all red, incl. lum allowed / dead net raising / pre-approved
+  draft / key in URL / temperature 0.9 / edge touching the impacts table.
+- Live: <fill: python -m app.ai_edge --selftest, then <hid> --limit 3 with USE_LIVE=1>
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 4c — the message panel in main.py: broadcasts grouped by
+  audience, `missing` and `needs_name` visible, the Swahili DRAFT badge, an approve
+  control that does nothing but mark `approved`. Then the three Lumasaba sentences.
+
 ## Session 21 — Phase 2 item 4a: the broadcast layer (D-051..D-054)
 - What changed: app/messages.py new (341 lines): load_messages, facts_for, render,
   messages_for, CLI. data/messages.csv v1.0 (3 English templates, lum pending).
@@ -31,7 +59,14 @@ Newest entry at the top. Start each session by reading this. **Submission: 31 Ju
   now red on the break.
 - ontology v0.3 -> v0.4 reddened a UI test asserting the literal string. Never assert
   a version literal; test_map_ui.py now reads ONTOLOGY_VERSION.
-- Live: <fill: python -m app.messages <hid> --lang en on the real graph>
+- Live: - Live, real graph, hazard 15: 72 messages (62 villages + 10 crossings), 0 missing,
+  0 errors, 5 impacts correctly not broadcast (1 SEVERED road + 4 SERVICE_AT_RISK).
+  CAP certainty = {'Likely': 72}: NOT ONE `Possible`, because no unclassified crossing
+  blocks anybody — D-039 confirmed from a second code path that never read D-039.
+  lum: 0 messages, 72 missing, every one named. FOUND: 11 of 62 village broadcasts
+  name a bare OSM way id (w747829218 x8, w160219946 x3) — an id on a map is a
+  credibility leak; an id in a radio message to a chief is not a warning. Fix is
+  operator naming in operator_crossings.csv, not code.
 - Days to deadline: 20 (internal 30 Jul).
 - NEXT STEP: Phase 2 item 4b — app/ai_edge.py (one function, urllib, no new dependency,
   Gemini free tier, Swahili only, always DRAFT, "edge unavailable" with no key) and the

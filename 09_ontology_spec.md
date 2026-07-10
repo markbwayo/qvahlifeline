@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v1.4 (THE core artifact)
+# 09 — Ontology Specification v1.5 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -358,6 +358,14 @@ system a judge cannot audit, because it is not in English. So it is not generate
   officer's screen that its own was never written, is the last-mile form of a false
   all-clear (invariant 6). `messages_for()` returns `missing` and `errors` separately: a
   missing template is a committee gap, a template that will not fill is a bug.
+- **A crossing broadcast as a bare OSM way id is reported** (`messages_for().needs_name`),
+  with a count of the broadcasts that name it. The message still renders — a labelled id
+  beats silence — but *"the road crosses w747829218"* is not a sentence a chief can act
+  on, and only an operator with satellite imagery can fix it. On the pilot graph 11 of 62
+  village broadcasts name a bare id (`w747829218` ×8, `w160219946` ×3). The fix is a row
+  in `data/operator_crossings.csv`, never code (D-055).
+- `render()` returns `facts` alongside `text`, so a caller may check that the proper names
+  the **engine** produced survived a translation — a check against the graph, not the prose.
 
 ### CAP alignment (v1.4)
 Every field is derived from something the engine computed. Nothing is invented to fill a slot.

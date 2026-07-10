@@ -34,15 +34,24 @@ hallucinated "bridge out" wastes an evacuation; a hallucinated "all clear" can k
    the *answer* still comes from the deterministic engine.
 
 ## Provider policy
-Default Gemini API free tier; one adapter function so the provider can swap in an
-afternoon; no resident model on the VPS; no Anthropic API in production. Edge failure
-degrades gracefully: With no API key, or a dead endpoint, the edge returns `edge unavailable`; English and
-   Lumasaba render regardless, because neither passes through a model. This is not a
-   fallback bolted on — it is the architecture. the system runs fully without AI (English template text), which
-is itself a resilience talking point.
-With no API key, or a dead endpoint, the edge returns `edge unavailable`; English and
-Lumasaba render regardless, because neither passes through a model. That is the
-architecture, not a fallback bolted onto it.
+Default Gemini free tier via one adapter, `ai_edge(task, payload)`; swapping providers
+means editing `_call()` and nothing else. `urllib` only — no dependency for one HTTP POST.
+No resident model on the VPS; no Anthropic API in production. The model string is
+**env-configurable** (`GEMINI_MODEL`, default `gemini-2.5-flash`): Google cut free-tier
+quotas in December 2025 and moved the 3.x Pro models to paid-only in April 2026, and a
+demo hardcoded to a model string dies on someone else's release schedule. The key rides
+in the `x-goog-api-key` header, never in the URL. Temperature is 0: a flood warning is not
+a creative task. Free-tier inputs and outputs may be used by Google to improve their
+products — our payload is public warning text naming villages and bridges, and carries no
+personal data.
+
+**The edge NEVER raises on failure**, and this is the exact inverse of `hazards.scan_live()`,
+which raises on every feed failure. A dead river gauge reporting "no hazard" is
+indistinguishable from a calm river. A dead translator costs a convenience: English and
+Lumasaba render regardless, because neither passes through a model. Losing the forecast is
+losing the warning. **A refusal, however, is not a failure:** asking the edge for Lumasaba
+raises (D-052). Every output carries `approved: False` and `status: DRAFT` until a human
+says otherwise.
 
 ## The pitch line worth memorising
 "Everyone else points AI at the forecast. We point deterministic engineering at the
