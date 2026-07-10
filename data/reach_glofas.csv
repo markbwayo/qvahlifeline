@@ -1,0 +1,2 @@
+reach_id,glofas_lat,glofas_lon,note,verified_by
+w188321163,0.925,34.275,"Cell containing the B112 town crossing. Mean 6.1 m3/s / annual-max mean 12.7 matches the Manafwa at Bubulo (D-004 measured 4-7 m3/s). The two adjacent cells under this same 4.3 km reach read 67.7 and 91.5 m3/s mean and are non-monotonic downstream - GloFAS models a different channel in them. Verified against elevation 1178 m and catchment size.",Bwayo

@@ -1,0 +1,4 @@
+hazard_kind,severity,return_period_years,note
+riverine_flood,watch,2,"Q2: exceeded in roughly half of years. Screening level."
+riverine_flood,alert,5,"Q5: a wet-season peak. Engineered bridges score AT_RISK, nothing severs."
+riverine_flood,emergency,10,"Q10: the 1997/1998/2002 level on the Manafwa. Engineered bridges become LIKELY_IMPASSABLE."
