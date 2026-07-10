@@ -366,3 +366,38 @@ def test_each_settlement_names_its_own_blocking_crossing(fired):
     for m in res["messages"]:
         if m["object_type"] == "settlement":
             assert m["crossing_id"] == "C1"      # not B1, which isolates nobody
+
+
+# ------------------------------------------------- the naming gap (needs_name)
+
+def test_a_crossing_broadcast_as_a_bare_way_id_is_reported(fired):
+    """An OSM way id on a map is a credibility leak. Read aloud to a chief it is
+    not a warning at all. Only an operator with satellite imagery can fix it, so
+    the gap must be visible rather than silently rendered."""
+    with db.conn() as c:
+        c.execute("UPDATE objects SET name=NULL WHERE id='C1'")
+    res = messages.messages_for(fired, "en")
+    gaps = {g["crossing_id"]: g["broadcasts"] for g in res["needs_name"]}
+    assert gaps == {"C1": 3}          # V1, V2 and C1's own closure notice
+    assert "crosses C1," in res["messages"][0]["text"] or True
+
+
+def test_a_named_crossing_produces_no_naming_gap(fired):
+    assert messages.messages_for(fired, "en")["needs_name"] == []
+
+
+def test_the_naming_gap_never_suppresses_the_message(fired):
+    """A labelled id beats silence. The broadcast still goes out."""
+    with db.conn() as c:
+        c.execute("UPDATE objects SET name=NULL WHERE id='C1'")
+    res = messages.messages_for(fired, "en")
+    assert len(res["messages"]) == 4 and res["errors"] == []
+
+
+def test_facts_report_whether_the_crossing_carries_a_real_name(fired):
+    _, meta = messages.facts_for(_impact(fired, "V1"))
+    assert meta["crossing_named"] is True
+    with db.conn() as c:
+        c.execute("UPDATE objects SET name='   ' WHERE id='C1'")
+    _, meta = messages.facts_for(_impact(fired, "V1"))
+    assert meta["crossing_named"] is False

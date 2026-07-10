@@ -24,6 +24,10 @@ Three refusals worth stating out loud, each a test:
     exists, is reported by name.** A settlement that is ISOLATED and has no message
     in its own language must appear on the officer's screen as a gap. Silence and
     safety look identical otherwise (invariant 6).
+  * **A crossing broadcast as a bare OSM way id is reported too** (`needs_name`).
+    The message renders - a labelled id beats silence - but "the road crosses
+    w747829218" is not a sentence a chief can act on, and only an operator with
+    satellite imagery can fix it. The gap is a CSV edit, and it is visible.
 
 What may NOT appear in a broadcast, enforced by the slot whitelist in `ontology`:
   * `lead_time_hrs` - the playbook's completion deadline for an OWNER. The district
@@ -228,6 +232,12 @@ def facts_for(impact_id):
             "impact_id": impact_id, "hazard_id": imp["hazard_id"],
             "object_id": obj["id"], "object_type": obj["type"], "state": imp["state"],
             "crossing_id": crossing["id"] if crossing else None,
+            # An OSM way id on a map is a credibility leak. An OSM way id read
+            # aloud to a chief is not a warning - it is noise. The message still
+            # renders (a labelled id beats silence), and the gap is REPORTED so
+            # an operator can name the crossing in operator_crossings.csv. A gap
+            # the officer can see is not the same failure as one nobody knows of.
+            "crossing_named": bool(crossing and (crossing["name"] or "").strip()),
             "certainty": _certainty(c, imp["hazard_id"],
                                     crossing["id"] if crossing else None),
         }
@@ -266,7 +276,10 @@ def render(impact_id, lang="en", path=None):
             raise MessageError(
                 f"impact {impact_id}: slot {{{slot}}} is empty. A broadcast with a "
                 f"hole in it is worse than no broadcast.")
-    return dict(meta, lang=lang, text=tmpl.format(**f),
+    # `facts` rides along so a caller (the AI edge) can check that the proper
+    # names the ENGINE produced survived a translation - a check against the
+    # graph, never against the prose.
+    return dict(meta, lang=lang, text=tmpl.format(**f), facts=f,
                 template_version=MESSAGES_VERSION)
 
 
@@ -287,6 +300,7 @@ def messages_for(hazard_id, lang="en", path=None):
 
     book = load_messages(path)
     out, missing, errors, skipped = [], [], [], 0
+    unnamed = {}
     for r in rows:
         if (r["otype"], r["state"]) not in BROADCAST_STATES:
             skipped += 1
@@ -297,11 +311,19 @@ def messages_for(hazard_id, lang="en", path=None):
             missing.append(who)
             continue
         try:
-            out.append(render(r["id"], lang, path))
+            m = render(r["id"], lang, path)
         except MessageError as e:
             errors.append(dict(who, error=str(e)))
+            continue
+        out.append(m)
+        if m["crossing_id"] and not m["crossing_named"]:
+            u = unnamed.setdefault(m["crossing_id"],
+                                   {"crossing_id": m["crossing_id"], "broadcasts": 0})
+            u["broadcasts"] += 1
+
     return {"hazard_id": hazard_id, "lang": lang, "messages": out,
-            "missing": missing, "errors": errors, "not_broadcast": skipped}
+            "missing": missing, "errors": errors, "not_broadcast": skipped,
+            "needs_name": [unnamed[k] for k in sorted(unnamed)]}
 
 
 # ------------------------------------------------------------------------- CLI
@@ -334,6 +356,10 @@ def _cli(argv):
         print(f"\nMISSING {lang}: {m['label']} ({m['state']})")
     for e in res["errors"]:
         print(f"\nERROR {e['label']}: {e['error']}")
+    for n in res["needs_name"]:
+        print(f"\nNEEDS NAME: {n['crossing_id']} is broadcast to "
+              f"{n['broadcasts']} audience(s) as a bare object id. Name it in "
+              f"data/operator_crossings.csv.")
     return 1 if res["errors"] else 0
 
 
