@@ -41,7 +41,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import actions, db, hazards, propagate
+from . import actions, ai_edge, approvals, db, hazards, messages, propagate
 from .ontology import ONTOLOGY_VERSION, STATE_ORDER
 
 SCAN_KEY = "ui:last_scan"      # geocache row: the last scan attempt (02: no in-memory truth)
@@ -179,6 +179,61 @@ def flooded_set(objs_by_id, hz):
                                      hz.get("scope") or "reach")
 
 
+# --------------------------------------------------------------- broadcast reads
+
+def broadcast_panel(hazard_id):
+    """Everything the last-mile layer needs to render, and NOT ONE network call.
+
+    A live Gemini translation is 4-6 s of generation (measured, D-060). Sixty-two
+    villages in a page render is five minutes of blocking. So this reader:
+      * gets the English broadcasts and the gaps from `messages.messages_for`
+        (pure DB, one CSV load per page via the `book=` path);
+      * reads the Lumasaba gap the same way - `missing` is committee data nobody
+        has written yet, shown by village name (D-052);
+      * looks up any Swahili DRAFT that ALREADY EXISTS in the cache via
+        `ai_edge.cached_draft` - read-only, ungated, no provider (D-060);
+      * reads standing approvals from the `approvals` table, keyed to the exact
+        draft bytes (a re-translation under a changed prompt is not pre-approved).
+
+    A village whose Swahili is not cached shows a Draft button, which is the only
+    place a provider call happens - behind a click, never in a page load.
+    """
+    if hazard_id is None:
+        return None
+    en = messages.messages_for(hazard_id, "en")
+    lum = messages.messages_for(hazard_id, "lum")
+    signed = approvals.approved_for(hazard_id, "sw")
+
+    villages, crossings = [], []
+    for m in en["messages"]:
+        draft = ai_edge.cached_draft(m["text"], "sw")   # dict | None, no network
+        sw_text = draft["draft"] if draft and draft["status"] == "DRAFT" else None
+        row = {
+            "impact_id": m["impact_id"], "object_id": m["object_id"],
+            "label": label(m["object_id"], m.get("facts", {}).get("settlement")
+                           or m.get("facts", {}).get("crossing") or m["object_id"]),
+            "state": m["state"], "en": m["text"], "cap": m["cap"],
+            "needs_name": bool(m["crossing_id"] and not m["crossing_named"]),
+            "crossing_id": m["crossing_id"],
+            "sw": sw_text,
+            # approval is over the SWAHILI bytes, so it moves if the draft moves
+            "approved": bool(sw_text and m["impact_id"] in signed
+                             and signed[m["impact_id"]]["text_hash"]
+                             == approvals.text_hash(sw_text)),
+        }
+        (villages if m["object_type"] == "settlement" else crossings).append(row)
+
+    return {
+        "hazard_id": hazard_id,
+        "villages": villages, "crossings": crossings,
+        "en_count": len(en["messages"]),
+        "lum_missing": [m["label"] for m in lum["missing"]],
+        "errors": en["errors"],
+        "needs_name": en["needs_name"],
+        "not_broadcast": en["not_broadcast"],
+    }
+
+
 # ------------------------------------------------------------------ rendering
 
 def esc(s):
@@ -238,6 +293,87 @@ def scan_html(scan):
             f"{q or 'no verified points'}. {scan.get('checked', 0)} verified "
             f"point(s) checked; {scan.get('unverified')} river reaches carry no "
             f"verified GloFAS cell and cannot trigger.</div>")
+
+
+def _msg_row(r):
+    """One broadcast. The Swahili is a DRAFT until a human signs THESE bytes; a
+    row that failed the edge's sanity check is REJECTED, never DRAFT (D-056)."""
+    cap = r["cap"]
+    head = (f"<td><b>{esc(r['label'])}</b>"
+            f"<br><span class='st'>{esc(r['state'])} &middot; CAP "
+            f"{esc(cap['severity'])}/{esc(cap['certainty'])}/{esc(cap['urgency'])}</span>"
+            + ("<span class='nn'>bare crossing id &mdash; only an operator with "
+               "satellite imagery can name it (data/operator_crossings.csv)</span>"
+               if r["needs_name"] else "") + "</td>")
+    en = f"<td>{esc(r['en'])}</td>"
+
+    if r["sw"]:
+        badge = ("<span class='badge' style='background:#166534'>APPROVED</span>"
+                 if r["approved"] else
+                 "<span class='badge' style='background:#b45309'>DRAFT — not approved</span>")
+        sw = f"<td>{esc(r['sw'])}<br>{badge}</td>"
+        if r["approved"]:
+            act = "<td class='ok'>signed</td>"
+        else:
+            act = (f"<td><form method='post' action='/approve/{r['impact_id']}'>"
+                   f"<button class='sm'>Approve</button></form></td>")
+    else:
+        # no cached draft: the only place a provider call may originate, and it is
+        # behind a click (4-6 s), never in the page load.
+        sw = "<td class='muted'>no Swahili draft yet</td>"
+        act = (f"<td><form method='post' action='/draft/{r['impact_id']}'>"
+               f"<button class='sm scan'>Draft Swahili</button></form></td>")
+    return f"<tr>{head}{en}{sw}{act}</tr>"
+
+
+def broadcast_html(bp):
+    if bp is None:
+        return "<div class='sc grey'>No active hazard: no broadcasts to send.</div>"
+    parts = [f"<div class='sum'><b>{bp['en_count']}</b> English broadcasts ready "
+             f"&middot; {bp['not_broadcast']} impact(s) correctly not broadcast "
+             f"(a severed road or a service-at-risk facility needs a task, not a "
+             f"village warning).</div>"]
+
+    if bp["errors"]:
+        parts.append("<div class='sc red'><b>BUG: a template exists and the facts "
+                     "would not fill it.</b> "
+                     + ", ".join(f"{esc(e['label'])}: {esc(e['error'])}"
+                                 for e in bp["errors"]) + "</div>")
+
+    # Lumasaba: committee data nobody has written yet. A gap, shown by name (D-052).
+    if bp["lum_missing"]:
+        parts.append(
+            "<div class='sc yellow'><b>Lumasaba not yet written &mdash; "
+            f"{len(bp['lum_missing'])} broadcast(s) have no template in the language "
+            "that reaches the last mile.</b> This is committee data, authored in "
+            "data/messages.csv, never generated by a model. Until it is written these "
+            "villages are warned in English: "
+            + ", ".join(esc(v) for v in bp["lum_missing"]) + "</div>")
+    else:
+        parts.append("<div class='sc green'>Every broadcast has a Lumasaba "
+                     "template.</div>")
+
+    # needs_name: an operator task list, not an error (D-055).
+    if bp["needs_name"]:
+        parts.append(
+            "<div class='sc yellow'><b>Crossings broadcast as a bare OSM id "
+            "&mdash; an operator task, not a code fix.</b> A way id read aloud to a "
+            "chief is not a warning. Name each in data/operator_crossings.csv: "
+            + ", ".join(f"<code>{esc(n['crossing_id'])}</code> ({n['broadcasts']} "
+                        f"broadcast{'s' if n['broadcasts'] != 1 else ''})"
+                        for n in bp["needs_name"]) + "</div>")
+
+    def _table(rows, title):
+        if not rows:
+            return ""
+        body = "".join(_msg_row(r) for r in rows)
+        return (f"<h3>{title}</h3><table><tr><th>Audience</th><th>English "
+                f"(committee template, engine facts)</th><th>Swahili "
+                f"(AI edge &mdash; DRAFT)</th><th></th></tr>{body}</table>")
+
+    parts.append(_table(bp["villages"], "Village broadcasts"))
+    parts.append(_table(bp["crossings"], "Crossing closure notices"))
+    return "".join(parts)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -354,6 +490,14 @@ def home():
                          "least one action.</span>")
         cov_html = f"<div class='sc grey'>{''.join(parts)}</div>"
 
+    # ---- broadcasts: read-only, no network in this page render (D-060)
+    try:
+        bcast_html = broadcast_html(broadcast_panel(hz["id"] if hz else None))
+    except Exception as e:                       # noqa: BLE001 - shown, not swallowed
+        bcast_html = (f"<div class='sc red'><b>BROADCAST PANEL ERROR</b> &mdash; the "
+                      f"message layer could not be read. This is not an all-clear.<br>"
+                      f"<code>{esc(type(e).__name__)}: {esc(e)}</code></div>")
+
     legend = "".join(f"<span class='lg'><i style='background:{COLORS[s]}'></i>{s}</span>"
                      for s in STATE_ORDER)
 
@@ -372,6 +516,7 @@ def home():
                  .replace("__COVERAGE__", cov_html)
                  .replace("__IMPACTS__", impact_html)
                  .replace("__ACTIONS__", act_html)
+                 .replace("__BROADCAST__", bcast_html)
                  .replace("__JS__", js))
 
 
@@ -430,6 +575,39 @@ def scan():
             propagate.run(t["hazard_id"])
             actions.fire_actions(t["hazard_id"])
     save_scan(res)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/draft/{impact_id}")
+def draft(impact_id: int):
+    """Ask the edge for ONE Swahili draft, then redirect. This is the only route
+    that reaches a provider (4-6 s, D-060), and it does so for one impact behind a
+    click - never for 62 villages in a page load. The edge caches the result, so a
+    second click on the same text is free. Any failure (dead net, bad key, 4xx)
+    returns a status and is shown on the next render; it never raises here, because
+    a dead translator costs a convenience, not a warning (D-058)."""
+    try:
+        m = messages.render(impact_id, "en")
+        ai_edge.draft_swahili(m)                 # writes to cache on success; harmless on failure
+    except messages.MessageError:
+        pass                                     # a village with no template gets no draft; the gap is already shown
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/approve/{impact_id}")
+def approve(impact_id: int):
+    """A human signs the CURRENT cached Swahili draft for this impact. The signature
+    is over the exact bytes (approvals.text_hash), so it does not carry over to a
+    re-translation under a changed prompt. If no draft is cached, nothing is signed
+    and the page still renders - approval of a thing that does not exist is not a
+    silent success."""
+    try:
+        m = messages.render(impact_id, "en")
+        d = ai_edge.cached_draft(m["text"], "sw")
+        if d and d["status"] == "DRAFT" and d["draft"]:
+            approvals.approve(impact_id, "sw", d["draft"])
+    except messages.MessageError:
+        pass
     return RedirectResponse("/", status_code=303)
 
 
@@ -556,6 +734,9 @@ ul{padding-left:18px;font-size:13px} li{margin-bottom:5px}
 .ch-h{color:#1e3a8a} .ch-o{color:#222}
 .ch-a{background:#fef9c3;border:1px solid #eab308;padding:0 3px}
 .ch-alt{color:#b45309}
+button.sm{padding:4px 9px;font-size:11px;margin:0}
+.nn{display:block;font-size:10px;color:#b45309;font-style:italic;margin-top:3px}
+.muted{color:#999;font-style:italic}
 .lg{font-size:10px;margin-right:9px;white-space:nowrap}
 .lg i{display:inline-block;width:9px;height:9px;margin-right:3px}
 footer{font-size:10px;color:#666;padding:10px 16px;border-top:1px solid #ddd;margin-top:14px}
@@ -586,6 +767,12 @@ __COVERAGE__
 <th>Lead</th><th>Carrier<br>roads</th></tr>__ACTIONS__</table>
 <h3>Impacts, each with its why-chain</h3>
 <ul>__IMPACTS__</ul>
+<h3>Broadcast messages — committee words, engine facts, no model in the loop</h3>
+<p class='cap'>The English is a committee template with slots the engine fills from
+each impact's own why-chain. Lumasaba is authored by hand and never generated (it is
+the language nobody in the room can audit). The Swahili is the one thing a model
+touches here — a DRAFT, never sent until a human approves these exact words.</p>
+__BROADCAST__
 </div>
 <footer>Map data © OpenStreetMap contributors (ODbL) · River discharge: GloFAS via the
 Open-Meteo flood API · No language model decides any impact, trigger, or action:

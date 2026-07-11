@@ -260,9 +260,16 @@ def facts_for(impact_id):
 
 # ------------------------------------------------------------------- the renderer
 
-def render(impact_id, lang="en", path=None):
-    """Fill a committee template with engine facts. An empty slot RAISES."""
-    book = load_messages(path)
+def render(impact_id, lang="en", path=None, book=None):
+    """Fill a committee template with engine facts. An empty slot RAISES.
+
+    `book` may be a preloaded template map (from `load_messages`). `messages_for`
+    passes it so the CSV is parsed and validated ONCE per page, not once per
+    village - 72 broadcasts on the real graph. A None `book` loads and validates
+    as before, so a direct `render()` call keeps its own guarantee.
+    """
+    if book is None:
+        book = load_messages(path)
     f, meta = facts_for(impact_id)
     with db.conn() as c:
         kind = _hazard(c, meta["hazard_id"])["kind"]
@@ -298,7 +305,7 @@ def messages_for(hazard_id, lang="en", path=None):
             "WHERE i.hazard_id=? ORDER BY i.object_id", (hazard_id,)).fetchall()
         kind = _hazard(c, hazard_id)["kind"]
 
-    book = load_messages(path)
+    book = load_messages(path)          # parsed and validated ONCE for the page
     out, missing, errors, skipped = [], [], [], 0
     unnamed = {}
     for r in rows:
@@ -311,7 +318,7 @@ def messages_for(hazard_id, lang="en", path=None):
             missing.append(who)
             continue
         try:
-            m = render(r["id"], lang, path)
+            m = render(r["id"], lang, path, book=book)
         except MessageError as e:
             errors.append(dict(who, error=str(e)))
             continue
