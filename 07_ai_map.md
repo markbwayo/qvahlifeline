@@ -71,12 +71,13 @@ means *do not use the edge*, and a cache is part of the edge.
 
 **`cached_draft(text, lang) -> dict | None`** is the read-only door. It never calls the
 provider, never writes, and returns `None` on a miss. It is the **only** function a page
-render may call. A single round trip to Google was measured at **11.3 s** on the pilot VPS
-— `getaddrinfo` returned an IPv6 address with a dead route, and `urllib` walks that list in
-order while `curl` races the families and looked healthy at 0.37 s. Sixty-two villages ×
-one round trip is not a page load, and the free tier's 10 RPM forbids it regardless.
-`cached_draft` is ungated on purpose: `AI_EDGE_LIVE` governs whether we may *speak* to a
-model, and reading a draft we already hold speaks to nobody.
+render may call. A successful Gemini call was measured at **4–6 s** on the pilot VPS —
+that is generation at temperature 0, not the network: a rejected request (a bad key, HTTP
+400) returns in ~0.2 s over the same round trip. Sixty-two villages × ~5 s is roughly
+**five minutes** of blocking generation, so a page that calls the provider in its render
+path is not a page, and the free tier's 10 RPM forbids it regardless. `cached_draft` is
+ungated on purpose: `AI_EDGE_LIVE` governs whether we may *speak* to a model, and reading
+a draft we already hold speaks to nobody.
 
 **Any live probe of the edge that reuses a previously translated string is unfalsifiable**,
 because it never reaches the provider. It returns a cached `DRAFT` in ~0.1 s and looks like
@@ -94,7 +95,7 @@ rotated key that never reached `.env` arrives as a `403`, and the presenter must
 one second, not twenty-two. **A timeout is not retried either** — a 429 is a prompt
 response, a hang is not, and a hang offers no evidence the second attempt would return.
 Worst case is `2 × TIMEOUT_S + RETRY_PAUSE_S` = 42 s, reachable only if a slow server
-answers 429 twice; the realistic bound is one round trip plus two seconds.
+answers 429 twice. Measured on the pilot VPS a rejection returns in ~0.2 s and a successful call in 4–6 s, so a real 503-then-success costs about `5 + 2 + 5` ≈ 12 s against a two-minute demo — the retry buys a rendered draft for the price of one pause, and a bad key still fails in ~0.2 s because it is never retried.
 
 The test that carries this decision is not *"a 429 retries"* — that passes against code
 which retries everything. It is **"a 400 does not"**, asserted on the provider call count.
