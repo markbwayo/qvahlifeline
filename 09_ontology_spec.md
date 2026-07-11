@@ -1,4 +1,4 @@
-# 09 — Ontology Specification v1.5 (THE core artifact)
+# 09 — Ontology Specification v1.6 (THE core artifact)
 
 Palantir-style semantic layer: **objects** (typed things with properties), **links**
 (typed relationships), **hazard propagation** (deterministic rules over links),
@@ -366,6 +366,36 @@ system a judge cannot audit, because it is not in English. So it is not generate
   in `data/operator_crossings.csv`, never code (D-055).
 - `render()` returns `facts` alongside `text`, so a caller may check that the proper names
   the **engine** produced survived a translation — a check against the graph, not the prose.
+
+## The approval store (v1.6)
+
+`data/`-free: approvals live in the DB, table `approvals(impact_id, lang, text_hash,
+approved_by, approved_at)`, primary key `(impact_id, lang, text_hash)`.
+
+- **A human signature is over the draft BYTES, never the impact id alone.** `text_hash`
+  is `sha256` of the approved Swahili text. A draft re-translated after the system
+  prompt changed (D-059) has a different hash, so an old approval does not silently
+  bless new words — the committee re-approves when the words move. This is the same
+  wall D-060 draws between the edge's draft cache (what a model proposed) and this
+  table (what a human authorised): two stores, on purpose.
+- The table self-heals its schema on first use (`approvals._ready()`, D-037 pattern):
+  a migration that depends on being remembered is missed by a script or a fresh deploy.
+- Nothing here decides an impact or reads an English string as authority. It records
+  one row on approve and reads it back so the panel can badge a broadcast APPROVED.
+
+## The read side, message panel (v1.6 — extends v1.3)
+
+- **The page render calls `ai_edge.cached_draft()` and NEVER `ai_edge()`.** A live
+  translation is 4–6 s of generation (D-060, measured); the free tier is ~10 RPM; 62
+  villages inline is an outage. The provider is reached only behind a click, on
+  `POST /draft/{impact_id}`.
+- **A cached `edge unusable` row is never rendered as a draft** (D-056). Only
+  `status == "DRAFT"` is a translation a human may approve; a failed one is REJECTED.
+- **The Lumasaba gap, the `needs_name` gap, and template `errors` each render by name**
+  (invariant 6). A village warned in a language nobody authored, and a crossing read as
+  a bare OSM id, are gaps an officer must SEE — silence and safety must not look alike.
+- `messages.render(book=...)` lets `messages_for()` load and validate the CSV once per
+  page. Behaviour is identical to a per-call load; it is a cost fix, not a rule change.
 
 ### CAP alignment (v1.4)
 Every field is derived from something the engine computed. Nothing is invented to fill a slot.
