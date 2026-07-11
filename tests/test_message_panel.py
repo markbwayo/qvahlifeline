@@ -49,8 +49,10 @@ def graph(tmp_path, monkeypatch):
             ("Clin", "clinic", "Namuembi Medical Centre", 0.95, 34.28, {}),
         ]
         for oid, t, n, la, lo, p in objs:
-            c.execute("INSERT INTO objects VALUES(?,?,?,?,?,?,?)",
-                      (oid, t, n, la, lo, json.dumps(p), "osm"))
+            c.execute(
+                "INSERT INTO objects (id, type, name, lat, lon, props_json, "
+                "source, created_utc) VALUES (?,?,?,?,?,?,?,?)",
+                (oid, t, n, la, lo, json.dumps(p), "osm", db.now()))
         c.execute("INSERT INTO hazards(kind,severity,scope,target_id,source,"
                   "trigger_detail,active) VALUES(?,?,?,?,?,?,1)",
                   ("riverine_flood", "emergency", "river", "R1", "GloFAS", "Q10"))
