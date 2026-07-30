@@ -3,6 +3,145 @@
 Newest entry at the top. Start each session by reading this. **Submission: 31 July
 2026; internal deadline 30 July.**
 
+## Session 27 — the two crossing names (D-062); Lumasaba deferred (D-063)
+- What changed: data/operator_crossings.csv gains two rows — op_namakhutu_bridge
+  (w747829218) and op_namutebi_bridge (w160219946). No code. D-062, D-063.
+- Names taken from the graph's own nearest named settlement (296 m / 210 m), not
+  from memory or satellite. Provenance in the note field: operator-assigned label,
+  not an official district name.
+- THE TRAP AVOIDED: the operator CSV's road_class overwrites crossing_class on
+  match, and crossing_class gates the vehicle graph. A footpath value on either row
+  would have stripped their carries links and silently un-isolated 11 villages.
+  Both rows say minor_road. match_hint set on both — the existing north footpath
+  culvert is 69 m from w747829218 and identity is never resolved by proximity.
+- D-063: Lumasaba deferred. English-only ships; the gap renders by village name.
+- Tested + result: <fill after injection — needs_name count, 62/51/8/3 unchanged>
+- Days to deadline: 1 (submission 31 Jul).
+- NEXT STEP: README + submission write-up, video, Devpost form.
+
+## Session 26 — Image-2 advice reviewed and rejected; schematic refreshed to v2
+- Reviewed external AI advice ("LIFELINE Husika", six-hour plans, SMS delivery,
+  ICPAC ingestion). Rejected under rule 6 and D-051/D-052: no rename, no delivery
+  build, no arrival-time framing. No earlier-prototype disclosure applies — the
+  build began inside the hackathon window. One kept action: re-verify portal
+  eligibility wording at submission (already in 08 checklist).
+- Schematic v1 found stale in four places: AI edge claimed Lumasaba drafting
+  (contradicts D-052), WorldPop listed (D-040), SRTM floodplain listed (never
+  built), CHIRPS listed (never wired). v2 produced matching built reality; 08
+  checklist item "schematic refreshed" now closeable.
+- Tested + result: n/a (no code).
+- Days to deadline: 14 (internal 30 Jul).
+- NEXT STEP: unchanged from QLL 07 — run the diagnostic query on the VPS for
+  w747829218 / w160219946, supply anchor names, author the three Lumasaba
+  sentences. Those two tasks still gate the demo.
+
+## Session 25 — Phase 2 item 4c: the message panel (D-061)
+- What changed: app/main.py +189 (broadcast_panel, broadcast_html, /draft + /approve
+  routes, cached_draft in home()). app/approvals.py new (91 lines, the human-signature
+  table). app/messages.py +book= passthrough (one CSV load per page). 
+  tests/test_message_panel.py new (20 tests). 05 D-061; 09 -> v1.6. Docs before code.
+- THE PANEL NEVER CALLS A MODEL IN A PAGE RENDER: home() reads ai_edge.cached_draft()
+  (read-only, ungated, no network). A live translation is 4-6 s (D-060 measured); 62
+  villages inline would be ~5 min. The provider is reached ONLY behind a click, on
+  POST /draft. Locked by a control that traps _call and probes broadcast_panel on the
+  uncaught path (home()'s error-guard was swallowing the trap - a test gap found in
+  review, not a code gap).
+- APPROVAL IS A SEPARATE TABLE keyed to the Swahili BYTES (approvals.text_hash), not
+  the impact id. The edge cache stores what a model proposed; this table stores what a
+  human signed (D-060 wall). A re-translation under a changed prompt has a different
+  hash, so an old signature never blesses new words. Locked by a test.
+- LIVE, real graph, hazard 18: villages 62 + crossings 10 = 72 broadcasts, 5 correctly
+  not broadcast (1 SEVERED + 4 SERVICE_AT_RISK), 0 errors. lum missing 72 (none written
+  yet - shown by name, D-052). needs_name = w747829218 (9), w160219946 (4) + 5 minor
+  ford nodes. Map renders end to end: 62 ISOLATED, spine red, channel blue.
+- FIXTURE BUG caught by the VPS suite, not the container: the objects INSERT was
+  positional (7 values) vs the real 8-column table (created_utc). All 20 panel tests
+  ERRORED in setup while the 315 real tests stayed green. Fixed by naming columns.
+  Container stub schema corrected to 8 columns so it reproduces the VPS. This is why
+  the suite runs on the VPS, not only in the container.
+- Tested + result: 20 panel + prior = 335 passed on the VPS. Two negative controls
+  (home reaching the provider; a non-DRAFT cached row shown as Swahili) came back GREEN
+  in review, exposing test gaps; both rewritten to probe the uncaught path and now red.
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP (Session 25, demo polish, new chat): the two crossing names + three Lumasaba
+  sentences into the CSVs; re-run; the demo text is then clean end to end. Then dry-run
+  the 2-minute story (08), record in two takes. main.py is now 781 lines - ask for it.
+
+## Session 24 — the edge's guarantees: retry, gate, closed payload, cache door
+- What changed: app/ai_edge.py rewritten (393 lines). tests/test_ai_edge.py 25 -> 60.
+  07 -> v1.2. 05 gains D-057..D-060 and a repair (see below). 09 + ontology UNCHANGED.
+  Docs before code, both commits.
+- D-057: retry once, 2 s, on 429/503 ONLY; never a 4xx, never a timeout. Load-bearing
+  test is "a 400 does NOT retry" on the call count. Live-verified: bad key -> HTTP 400,
+  retried:false, on a cold cache.
+- D-058: AI_EDGE_LIVE gates the edge; USE_LIVE gates the core and is not read here.
+  Demo day = USE_LIVE=0, AI_EDGE_LIVE=1. Live-verified: core offline, Swahili DRAFT live.
+- D-059: payload is a closed set {text,target_lang,preserve}, unknown key RAISES; cache
+  key hashes SYSTEM; an ast test forbids any engine import. Confirmed live: the key
+  change orphaned a pre-D-059 cached draft (no SYSTEM in its key), purged on next run.
+- D-060: order is gate->cache->key->provider (a key MAKES a draft, never SERVES one);
+  new cached_draft() read-only door, ungated, the only fn a page render may call;
+  --selftest takes its own text. Live: key emptied, cached DRAFT still renders.
+- MEASURED (six timed calls, novel text each): a successful Gemini call is 4-6 s
+  (generation at temp 0), a rejected one ~0.2 s. 62 villages x ~5 s = ~5 min of
+  blocking generation -> the panel must read cached_draft, never call the provider.
+- RETRACTED: an earlier 11.3 s reading was blamed on a dead IPv6 route; not reproduced
+  in six calls. Cause recorded as unknown transient. gai.conf IPv4-preference kept as a
+  precaution against a real 6 s socket stall, not as that fix. 05 D-060 and 07 corrected
+  in the same docs commit.
+- THREE bad probes caught this session, all the same failure: a check that reuses a
+  cached string, or compares two endpoints, cannot fail. Rule adopted: every live edge
+  probe varies its text and hits the path it claims to test.
+- Tested + result: 60 in test_ai_edge.py + prior = 315 passed on the VPS. Negative
+  controls, 14 total across D-057/58/59/60, each reddens exactly its guard; NC9
+  (from-import alias) and NC14 (cached_draft's own key derivation) each caught a guard
+  that would have shipped green.
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 4c — the message panel in main.py. Reads ai_edge.cached_draft()
+  in home() (zero network in a page render); a "Draft Swahili" POST route calls ai_edge()
+  once per impact then redirects. Broadcasts grouped by audience; missing/needs_name/errors
+  each shown distinctly; edge unusable rendered REJECTED (never DRAFT); approve control
+  only marks approved. Ask for main.py (594 lines, Session 20) first. Then the two crossing
+  names + three Lumasaba sentences into the CSVs (§3 handoff), still the only non-code task
+  on the critical path and only Bwayo can do it.
+
+## Session 23 — Phase 2 item 4b closed: the edge's two guarantees (D-057, D-058, D-059)
+- What changed: app/ai_edge.py rewritten (335 lines) — retry, gate, closed payload,
+  prompt-bound cache key. tests/test_ai_edge.py 25 -> 47. 07 provider policy -> v1.1.
+  09 and ontology.py UNCHANGED: a retry policy is not ontology. Docs commit before code.
+- D-057: retry once, 2 s pause, on 429/503 ONLY. Never 400/401/403/404, never a timeout.
+  The load-bearing test is "a 400 does NOT retry", asserted on the provider call count —
+  a test that only checks "a 429 retries" passes against code that retries everything.
+  A rotated key arrives as 403; the presenter must see it in one second, not twenty-two.
+  Docstring's "inside 20 s" corrected: worst case 2 x TIMEOUT_S + 2 s = 42 s.
+- D-058: AI_EDGE_LIVE (default 0) gates the edge; USE_LIVE gates the core and is no
+  longer read here. The edge is safe BY CONSTRUCTION — the property USE_LIVE guarantees
+  by fiat — so it needs its own switch, not that one. Demo day = USE_LIVE=0,
+  AI_EDGE_LIVE=1. The test fixture now runs the whole file at USE_LIVE=0, so any
+  regression to the old gate reddens 28 tests, not one.
+- D-059: payload is a closed key set {text, target_lang, preserve}; an unknown key
+  RAISES before the provider is called. Cache key hashes SYSTEM. An ast test forbids any
+  module-level import of an engine module. Hard rule 1 is now a property of the
+  signature, not a promise.
+- FOUND: the ast guard's first version caught `import propagate` and missed
+  `from .messages import render as _r`. NC9. Fixed before shipping.
+- 05_decisions_log.md WAS CORRUPTED and is repaired in this commit: D-051, D-052 and
+  D-055 each appeared twice, and D-054 was truncated at "CAP `instruction` ca" with a
+  duplicate D-055 pasted onto the same line. D-054 reconstructed from 09 v1.4's CAP
+  table, and the row records that it was reconstructed. 62 rows -> 60.
+- Tested + result: 47 in tests/test_ai_edge.py + prior = <fill> passed on the VPS.
+  NINE negative controls, all red where they should be: retry-everything (3 red),
+  MAX_ATTEMPTS=3 (2), gate reads USE_LIVE (28), open payload (1), cache key without
+  SYSTEM (1), `import propagate` (1), cached hit trusts stored `approved` (1),
+  timeout retried (2), `from .messages import` (1).
+- Live: <fill: selftest disabled / DRAFT + Swahili / bad-key 4xx wall time>.
+- Days to deadline: 20 (internal 30 Jul).
+- NEXT STEP: Phase 2 item 4c — the message panel in main.py. Broadcasts grouped by
+  audience, `missing` and `needs_name` visible, per-message Draft Swahili (cached),
+  an approve control that only marks `approved`. TRAP: `edge unusable` returns the
+  REJECTED draft; the panel must render `draft` only when status == "DRAFT". Ask for
+  app/messages.py first. Then the two crossing names + the three Lumasaba sentences.
+
 ## Session 22 — Phase 2 item 4b: the AI edge, and the naming gap (D-055, D-056)
 - What changed: app/ai_edge.py new (245 lines, urllib only, no new dependency).
   messages.py gains `needs_name` + `facts` on render(). 09 -> v1.5; 07 provider policy
