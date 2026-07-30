@@ -1,3 +1,5 @@
 id,structure,name,lat,lon,road_class,source,note,match_hint
 op_manafwa_tc_bridge,bridge,Manafwa Bridge (B112 town crossing),0.9406239,34.2802124,main_road,operator,Main tarmac crossing of the Manafwa (B112 secondary) at the town; operator-classified from satellite,w128611448
 op_north_footpath_culvert,culvert,North footpath culvert,0.9564980,34.2896510,footpath,operator,Footpath crossing upstream north of the town; operator-classified from satellite,
+op_namakhutu_bridge,bridge,Namakhutu bridge,0.9558820,34.2896745,minor_road,operator,Unnamed OSM bridge carrying a minor road over the Manafwa; label assigned by the operator from the nearest named settlement (Namakhutu North 296 m) because OSM carries no name and no bridge:name; structure unchanged from OSM; not an official district name,w747829218
+op_namutebi_bridge,bridge,Namutebi bridge,0.9572505,34.2859244,minor_road,operator,Unnamed OSM bridge carrying a minor road over the Manafwa; label assigned by the operator from the nearest named settlement (Namutebi 210 m) because OSM carries no name and no bridge:name; structure unchanged from OSM; not an official district name,w160219946
